@@ -54,7 +54,7 @@ export function PainelTeste({ store, estado, modo, leve, motivo3d, alternarModo,
   const adicionarBrinde = useCallback(async () => {
     const ev = store.getEstado().evento;
     if (!ev) return;
-    const brinde = proximoBrindeExtra(ev.brindes.map((b) => b.id));
+    const brinde = proximoBrindeExtra([...store.idsUsados()]);
     try {
       await store.adicionarBrinde(brinde);
       setMsg(`Entrou na roleta: ${brinde.nome} (× ${brinde.quantidade}).`);

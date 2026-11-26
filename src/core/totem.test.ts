@@ -2,7 +2,7 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as db from "./db";
 import { fatiaSobPonteiro } from "./geometria";
-import { ConfigBrindes } from "./regras";
+import { ConfigBrindes, idBrinde, validarConfig } from "./regras";
 import { TotemStore } from "./totem";
 
 const CONFIG: ConfigBrindes = {
@@ -188,5 +188,145 @@ describe("TotemStore", () => {
     await expect(store.estornar(id, true)).rejects.toThrow(); // durante o giro, não
     const achadas = await store.consultarCpf(CPF1);
     expect(achadas.map((j) => j.id)).toEqual([id]);
+  });
+});
+
+describe("TotemStore · cadastro de brindes", () => {
+  const TRES: ConfigBrindes = {
+    ...CONFIG,
+    brindes: [...CONFIG.brindes, { id: "c", nome: "Brinde C", rotulo: "C", quantidade: 2 }],
+  };
+
+  it("editar muda nome e texto da fatia e persiste; texto vazio usa o nome", async () => {
+    const { store, banco } = await preparar();
+    await store.abrirEvento(TRES);
+    await store.editarBrinde("a", { nome: "  Caneca  ", rotulo: "Caneca!" });
+    expect(store.getEstado().fatias[0]).toMatchObject({ id: "a", nome: "Caneca", rotulo: "Caneca!" });
+    await store.editarBrinde("b", { nome: "Garrafa térmica", rotulo: "" });
+    expect(store.getEstado().fatias[1].rotulo).toBe("Garrafa térmica");
+    await expect(store.editarBrinde("a", { nome: "", rotulo: "x" })).rejects.toThrow(/nome/);
+    await expect(store.editarBrinde("a", { nome: "X", rotulo: "12345678901234567" })).rejects.toThrow(/16/);
+    await expect(store.editarBrinde("zz", { nome: "X", rotulo: "" })).rejects.toThrow(/não encontrado/);
+    const s2 = new TotemStore();
+    await s2.iniciarComDb(banco);
+    expect(s2.getEstado().evento!.brindes.map((b) => b.nome)).toEqual(["Caneca", "Garrafa térmica", "Brinde C"]);
+  });
+
+  it("mover muda a ordem das fatias (nas bordas não faz nada)", async () => {
+    const { store, banco } = await preparar();
+    await store.abrirEvento(TRES);
+    await store.moverBrinde("c", -1);
+    expect(store.getEstado().fatias.map((f) => f.id)).toEqual(["a", "c", "b"]);
+    await store.moverBrinde("a", 1);
+    expect(store.getEstado().fatias.map((f) => f.id)).toEqual(["c", "a", "b"]);
+    await store.moverBrinde("c", -1);
+    await store.moverBrinde("b", 1);
+    expect(store.getEstado().fatias.map((f) => f.id)).toEqual(["c", "a", "b"]);
+    const s2 = new TotemStore();
+    await s2.iniciarComDb(banco);
+    expect(s2.getEstado().fatias.map((f) => f.id)).toEqual(["c", "a", "b"]);
+  });
+
+  it("remover brinde que nunca saiu apaga de vez", async () => {
+    const { store, banco } = await preparar();
+    await store.abrirEvento(TRES);
+    expect(await store.removerBrinde("b")).toBe("removido");
+    expect(store.getEstado().evento!.brindes.map((b) => b.id)).toEqual(["a", "c"]);
+    expect(store.getEstado().fatias.map((f) => f.id)).toEqual(["a", "c"]);
+    expect((await db.carregar(banco)).evento!.brindes.map((b) => b.id)).toEqual(["a", "c"]);
+  });
+
+  it("remover brinde que já saiu desativa (sai da roleta) e reativar devolve", async () => {
+    const { store, banco } = await preparar();
+    await store.abrirEvento(TRES);
+    digitarCpf(store, CPF1);
+    await esperar(() => store.getEstado().fase === "pronto");
+    await store.girar();
+    const saiu = store.getEstado().jogadaAtual!.brindeId;
+    // fim do giro simulado: nova instância retoma, revela e volta à atração
+    const s = new TotemStore();
+    await s.iniciarComDb(banco);
+    await esperar(() => s.getEstado().jogadas.every((j) => j.status === "revelado"));
+    s.fecharResultado();
+    expect(s.getEstado().fase).toBe("atracao");
+
+    expect(await s.removerBrinde(saiu)).toBe("desativado");
+    const ev = s.getEstado().evento!;
+    expect(ev.brindes.find((b) => b.id === saiu)?.ativo).toBe(false);
+    expect(ev.brindes).toHaveLength(3);
+    expect(s.getEstado().fatias.map((f) => f.id)).not.toContain(saiu);
+
+    await s.reativarBrinde(saiu);
+    expect(s.getEstado().evento!.brindes.find((b) => b.id === saiu)?.ativo).toBeUndefined();
+    const voltou = (s.getEstado().estoque.get(saiu) ?? 0) > 0;
+    expect(s.getEstado().fatias.some((f) => f.id === saiu)).toBe(voltou);
+  });
+
+  it("desativar o último brinde com estoque deixa a tela esgotada; reativar volta à atração", async () => {
+    const { store, banco } = await preparar();
+    await store.abrirEvento({ ...CONFIG, brindes: [{ id: "a", nome: "Brinde A", rotulo: "A", quantidade: 3 }] });
+    digitarCpf(store, CPF1);
+    await esperar(() => store.getEstado().fase === "pronto");
+    await store.girar();
+    const s = new TotemStore();
+    await s.iniciarComDb(banco);
+    await esperar(() => s.getEstado().jogadas.every((j) => j.status === "revelado"));
+    s.fecharResultado();
+    expect(await s.removerBrinde("a")).toBe("desativado");
+    expect(s.getEstado().fase).toBe("esgotado");
+    await s.reativarBrinde("a");
+    expect(s.getEstado().fase).toBe("atracao");
+    expect(s.getEstado().fatias).toHaveLength(1);
+  });
+
+  it("alterarEvento renomeia e troca o modo de sorteio", async () => {
+    const { store } = await preparar();
+    await store.abrirEvento(TRES);
+    await store.alterarEvento({ nome: "Festa 2026", modoSorteio: "porUnidade" });
+    const e = store.getEstado();
+    expect(e.evento!.nome).toBe("Festa 2026");
+    expect(e.fatias.find((f) => f.id === "c")?.peso).toBe(2);
+    await expect(store.alterarEvento({ nome: "   " })).rejects.toThrow(/nome/);
+  });
+
+  it("durante o giro, nada do cadastro pode mudar", async () => {
+    const { store } = await preparar();
+    await store.abrirEvento(TRES);
+    digitarCpf(store, CPF1);
+    await esperar(() => store.getEstado().fase === "pronto");
+    await store.girar();
+    expect(store.getEstado().fase).toBe("girando");
+    const antes = store.getEstado().evento;
+    await expect(store.editarBrinde("a", { nome: "X", rotulo: "" })).rejects.toThrow(/giro/);
+    await expect(store.moverBrinde("a", 1)).rejects.toThrow(/giro/);
+    await expect(store.removerBrinde("b")).rejects.toThrow(/giro/);
+    await expect(store.reativarBrinde("b")).rejects.toThrow(/giro/);
+    await expect(store.alterarEvento({ nome: "Y" })).rejects.toThrow(/giro/);
+    await expect(store.ajustarEstoque("a", 1)).rejects.toThrow(/giro/);
+    await expect(store.adicionarBrinde({ id: "d", nome: "D", rotulo: "", quantidade: 1 })).rejects.toThrow(/giro/);
+    expect(store.getEstado().evento).toBe(antes);
+  });
+});
+
+describe("regras · cadastro", () => {
+  it("ids novos vêm do nome e nunca se repetem", () => {
+    const usados = new Set<string>();
+    for (let i = 0; i < 200; i++) {
+      const id = idBrinde("Caneca Constelação!", usados);
+      expect(id).toMatch(/^caneca-constelacao-[0-9a-f]{4}$/);
+      expect(usados.has(id)).toBe(false);
+      usados.add(id);
+    }
+    expect(idBrinde("   ", [])).toMatch(/^brinde-[0-9a-f]{4}$/);
+  });
+
+  it("validarConfig aceita ativo opcional e exige ao menos um ativo", () => {
+    const base = { pin: "1234", brindes: [{ id: "a", nome: "A", quantidade: 1, ativo: false }, { id: "b", nome: "B", quantidade: 1 }] };
+    const { config, erros } = validarConfig(base);
+    expect(erros).toEqual([]);
+    expect(config!.brindes[0].ativo).toBe(false);
+    expect("ativo" in config!.brindes[1]).toBe(false);
+    expect(validarConfig({ ...base, brindes: [base.brindes[0]] }).erros.join()).toMatch(/desativados/);
+    expect(validarConfig({ ...base, brindes: [{ id: "a", nome: "A", quantidade: 1, ativo: "sim" }] }).erros.join()).toMatch(/ativo/);
   });
 });

@@ -35,6 +35,18 @@ function Chances({ estado }: { estado: EstadoTotem }) {
   );
 }
 
+/** Cartão do CPF "descolando" da tela no instante da confirmação (só visual, ~0,9 s). */
+export function CpfSaindo({ digitos }: { digitos: string }) {
+  return (
+    <div className={s.saindo} aria-hidden>
+      <section className={`${s.painel} ${s.cartaoSaindo}`}>
+        <p className={s.kicker}>CPF confirmado ✓</p>
+        <Visor digitos={digitos} ok />
+      </section>
+    </div>
+  );
+}
+
 export function Painel({ store, estado, abrirAdmin }: Props) {
   const { fase } = estado;
 
@@ -85,28 +97,50 @@ export function Painel({ store, estado, abrirAdmin }: Props) {
     );
   }
 
-  if (fase === "atracao") {
+  // Tela inicial: só o CPF (a roleta aparece depois que ele é confirmado).
+  if (fase === "atracao" || fase === "cpf") {
     return (
-      <section className={`${s.painel} ${s.entrada}`} onClick={() => store.comecar()}>
-        <p className={s.kicker}>{estado.evento?.nome ?? "Convenção 2026"}</p>
-        <h1 className={s.titulo}>
-          Constelação
-          <br />
-          de Brindes
-        </h1>
-        <p className={s.lema}>A nossa força é brilhar juntos.</p>
-        <Chances estado={estado} />
-        <button className={`${s.botao} ${s.respira}`} onClick={() => store.comecar()}>
-          Toque para participar
-        </button>
+      <section className={`${s.painel} ${s.painelCpf}`}>
+        <div className={s.cabecaCpf}>
+          <p className={s.kicker}>{estado.evento?.nome ?? "Convenção 2026"}</p>
+          <h1 className={s.titulo}>
+            Constelação
+            <br />
+            de Brindes
+          </h1>
+          <p className={s.lema}>A nossa força é brilhar juntos.</p>
+          <Chances estado={estado} />
+          <p className={s.lgpd}>
+            Usamos o CPF só para garantir uma jogada por pessoa. Não guardamos o número: guardamos um código protegido,
+            apagado ao fim do evento.
+          </p>
+        </div>
+        <div className={s.entradaCpf}>
+          <h2 className={s.tituloMenor}>Digite seu CPF</h2>
+          <Visor digitos={estado.digitos} />
+          <p className={`${s.aviso} ${estado.aviso ? s.avisoAtivo : ""}`} role="status">
+            {estado.verificando ? "Verificando…" : (estado.aviso ?? "Uma jogada por pessoa")}
+          </p>
+          <Teclado
+            aoDigito={(d) => store.digitar(d)}
+            aoApagar={() => store.apagar()}
+            aoLimpar={() => store.limpar()}
+            desativado={estado.verificando}
+          />
+          {fase === "cpf" && estado.digitos && (
+            <button className={s.botaoTexto} onClick={() => store.cancelar()}>
+              Cancelar
+            </button>
+          )}
+        </div>
       </section>
     );
   }
 
-  if (fase === "cpf" || fase === "pronto") {
-    const pronto = fase === "pronto";
+  // CPF confirmado: a roleta chegou; o painel lateral entra depois da animação.
+  if (fase === "pronto") {
     return (
-      <section className={s.painel}>
+      <section className={`${s.painel} ${s.depoisDaChegada}`}>
         {estado.avulsa ? (
           <>
             <p className={s.kicker}>Jogada liberada pela equipe</p>
@@ -114,42 +148,27 @@ export function Painel({ store, estado, abrirAdmin }: Props) {
           </>
         ) : (
           <>
-            <p className={s.kicker}>{pronto ? "Tudo certo" : "Uma jogada por pessoa"}</p>
-            <h2 className={s.tituloMenor}>{pronto ? "Agora é com você!" : "Digite seu CPF"}</h2>
-            <Visor digitos={estado.digitos} ok={pronto} />
+            <p className={s.kicker}>CPF confirmado ✓</p>
+            <h2 className={s.titulo}>Agora é com você!</h2>
           </>
         )}
+        <Chances estado={estado} />
         <p className={`${s.aviso} ${estado.aviso ? s.avisoAtivo : ""}`} role="status">
-          {estado.verificando ? "Verificando…" : (estado.aviso ?? " ")}
+          {estado.aviso ?? " "}
         </p>
-        {pronto ? (
-          <>
-            <button className={`${s.botao} ${s.girar}`} onClick={() => void store.girar()}>
-              Girar a roleta
-            </button>
-            <p className={s.dica}>ou agarre a roleta e gire com o dedo</p>
-            {!estado.avulsa && (
-              <button className={s.botaoTexto} onClick={() => store.apagar()}>
-                Corrigir CPF
-              </button>
-            )}
-          </>
-        ) : (
-          <Teclado
-            aoDigito={(d) => store.digitar(d)}
-            aoApagar={() => store.apagar()}
-            aoLimpar={() => store.limpar()}
-            desativado={estado.verificando}
-          />
-        )}
+        <button className={`${s.botao} ${s.girar}`} onClick={() => void store.girar()}>
+          Girar a roleta
+        </button>
+        <p className={s.dica}>ou agarre a roleta e gire com o dedo</p>
         <div className={s.rodape}>
+          {!estado.avulsa && (
+            <button className={s.botaoTexto} onClick={() => store.apagar()}>
+              Corrigir CPF
+            </button>
+          )}
           <button className={s.botaoTexto} onClick={() => store.cancelar()}>
             Cancelar
           </button>
-          <p className={s.lgpd}>
-            Usamos o CPF só para garantir uma jogada por pessoa. Não guardamos o número: guardamos um código protegido,
-            apagado ao fim do evento.
-          </p>
         </div>
       </section>
     );

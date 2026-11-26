@@ -3,6 +3,12 @@
 Roleta de brindes para a confraternização **OncologyGroup — "A nossa força é brilhar juntos"**,
 feita para rodar numa **tela touch** (totem) em um PC desconhecido, **sem internet**.
 
+**Fluxo do participante:** a tela inicial mostra só o campo de CPF (com teclado numérico na tela).
+Quando o CPF é confirmado, o cartão "descola" da tela e a roleta chega com uma animação inspirada no
+slide de referência: no 3D, centenas de folhas saem do cartão, voam em perspectiva e se juntam formando
+a roleta (aro, pinos e ponteiro surgem em seguida); no 2D, a roleta "levanta" em perspectiva via CSS.
+Depois do resultado, volta para a tela de CPF.
+
 - **Versão 2D com detalhes 3D** (`/`): roleta em canvas com perspectiva, espessura, aro metálico, brilho e céu da identidade visual. Leve: só anima `transform`.
 - **Versão 3D interativa** (`/3d/`): three.js; a roleta "descola" da tela e ganha volume, câmera viva com parallax, agarrar-e-lançar com o dedo, faíscas ao tocar o céu e revelação com estrelas que formam uma estrela. Se o PC não aguentar, cai sozinha para o 2D sem perder nada.
 - **Diagnóstico** (`/diagnostico/`): roda no PC do evento e diz se use 2D ou 3D.
@@ -23,9 +29,18 @@ feita para rodar numa **tela touch** (totem) em um PC desconhecido, **sem intern
 
 > `"modoSorteio": "porUnidade"` em `brindes.json` muda para chance proporcional ao estoque (ex.: 10 canecas pesam 10×).
 
-## Configurar os brindes
+## Cadastrar os brindes
 
-Copie `public/brindes.exemplo.json` para `public/brindes.json` (fora do git) e edite:
+O jeito principal é pelo **administrador** (5 toques no canto superior esquerdo ou `Ctrl+Shift+A`):
+
+- **Sem evento aberto → "Novo evento":** nome do evento, PIN novo, modo de sorteio, som e a lista de
+  brindes (comece vazio, pelo exemplo ou pelo `brindes.json`). Botão **Abrir evento**.
+- **Com evento aberto → aba "Brindes":** adicionar, editar nome e texto da fatia, ±1 no estoque,
+  subir/descer (ordem das fatias) e remover. Brinde que já saiu em alguma jogada não é apagado:
+  fica desativado (some da roleta) e pode ser reativado.
+- Textos com **teclado na tela** (letras, acentos, ç, números); teclado físico também funciona.
+
+Opcional: `public/brindes.json` (fora do git) serve como lista inicial. Formato:
 
 ```json
 {

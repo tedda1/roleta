@@ -242,6 +242,84 @@
   letter-spacing: 0.06em;
 }
 
+/* ---------- Tela inicial: só o CPF ---------- */
+.painelCpf {
+  max-width: min(1080px, 100%);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: clamp(20px, 4vmin, 48px);
+  align-items: center;
+  text-align: left;
+  padding: clamp(24px, 4vmin, 48px);
+}
+
+.cabecaCpf {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(10px, 1.8vmin, 18px);
+}
+
+.cabecaCpf .chip {
+  align-self: flex-start;
+}
+
+.entradaCpf {
+  display: flex;
+  flex-direction: column;
+  gap: clamp(8px, 1.4vmin, 14px);
+  text-align: center;
+}
+
+@media (orientation: portrait), (max-width: 760px) {
+  .painelCpf {
+    grid-template-columns: 1fr;
+    text-align: center;
+    max-width: min(620px, 100%);
+  }
+
+  .cabecaCpf .chip {
+    align-self: center;
+  }
+
+  .cabecaCpf .lgpd {
+    order: 10;
+  }
+}
+
+/* ---------- Painel lateral: entra depois que a roleta chega ---------- */
+.depoisDaChegada {
+  animation: entrarLado 600ms cubic-bezier(0.2, 0.8, 0.2, 1) 1.5s both;
+}
+
+@keyframes entrarLado {
+  /* invisível = intocável: nada de toque em botão que ainda não apareceu */
+  from { opacity: 0; transform: translateX(40px) scale(0.97); pointer-events: none; }
+  to { opacity: 1; transform: none; pointer-events: auto; }
+}
+
+/* ---------- Cartão do CPF descolando da tela (inspirado no slide: a UI plana ganha profundidade) ---------- */
+.saindo {
+  position: fixed;
+  inset: 0;
+  z-index: 5;
+  display: grid;
+  place-items: center;
+  pointer-events: none;
+  perspective: 1100px;
+}
+
+.cartaoSaindo {
+  max-width: 520px;
+  animation: descolar 900ms cubic-bezier(0.55, 0, 0.75, 0.2) both;
+  transform-origin: 50% 80%;
+}
+
+@keyframes descolar {
+  0% { opacity: 1; transform: none; }
+  25% { opacity: 1; transform: translateZ(60px) rotateX(-8deg) scale(1.04); }
+  100% { opacity: 0; transform: translateZ(-900px) rotateX(70deg) rotateZ(-8deg) scale(0.5); }
+}
+
 @media (prefers-reduced-motion: reduce) {
-  .painel, .cartao, .respira { animation: none; }
+  .painel, .cartao, .respira, .depoisDaChegada, .cartaoSaindo { animation: none; }
 }

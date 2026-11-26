@@ -215,7 +215,7 @@
 }
 
 .mini {
-  min-height: 40px;
+  min-height: 44px;
   min-width: 48px;
   padding: 0 10px;
   border-radius: 10px;
@@ -233,4 +233,80 @@
 .estornada td {
   opacity: 0.5;
   text-decoration: line-through;
+}
+
+/* ---------- cadastro do evento ---------- */
+
+.bloco {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  background: rgba(10, 34, 72, 0.45);
+  border: 1px solid rgba(105, 130, 176, 0.3);
+}
+
+.bloco h4 {
+  margin: 0;
+  font-family: var(--fonte-titulo);
+  font-size: 20px;
+}
+
+.rotuloBloco {
+  margin: 0;
+  font-size: 16px;
+  color: #a9bbea;
+}
+
+.opcoes {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.opcoes > * {
+  flex: 1 1 200px;
+}
+
+.opcaoAtiva {
+  background: #6982b0;
+  border-color: #fff;
+  box-shadow: 0 0 0 2px rgba(169, 187, 234, 0.45);
+}
+
+.pinNovo {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.pinNovo .pin {
+  flex: 1 1 200px;
+  text-align: center;
+}
+
+.tecladoPin {
+  max-width: 420px;
+}
+
+.ok {
+  margin: 0;
+  font-size: 15px;
+  color: #9fe3b0;
+}
+
+.confirmar {
+  background: #7a1f2b;
+  border-color: #ff8a8a;
+}
+
+.cresce {
+  flex: 1 1 auto;
+}
+
+.abrirEvento {
+  min-height: 64px;
+  font-size: 20px;
 }

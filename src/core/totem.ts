@@ -20,6 +20,10 @@ import {
   Evento,
   Jogada,
   LIMITE_BRINDES,
+  LIMITE_NOME,
+  LIMITE_ROTULO,
+  ModoSorteio,
+  brindeAtivo,
   calcularEstoque,
   cpfJaUsado,
   itensSorteaveis,
@@ -450,22 +454,122 @@ export class TotemStore {
     this.set({ evento: { ...ev, som } });
   }
 
-  /** Inclui um tipo de brinde novo no evento aberto (usado pela tela de teste). */
-  async adicionarBrinde(brinde: Brinde): Promise<void> {
+  /** Evento aberto e fora do giro: condição para mexer no cadastro. */
+  private eventoEditavel(): Evento {
     const ev = this.estado.evento;
     if (!ev) throw new Error("Abra o evento antes.");
     if (this.estado.fase === "girando") throw new Error("Aguarde o giro terminar.");
-    if (!brinde.id || ev.brindes.some((b) => b.id === brinde.id)) throw new Error(`Já existe um brinde com id "${brinde.id}".`);
-    if (ev.brindes.length >= LIMITE_BRINDES) throw new Error(`A roleta comporta no máximo ${LIMITE_BRINDES} tipos de brinde.`);
-    if (!Number.isInteger(brinde.quantidade) || brinde.quantidade < 1) throw new Error("Quantidade inválida.");
-    const novo: Evento = { ...ev, brindes: [...ev.brindes, { ...brinde, rotulo: brinde.rotulo || brinde.nome }] };
+    return ev;
+  }
+
+  private exigirBrinde(ev: Evento, id: string): Brinde {
+    const b = ev.brindes.find((x) => x.id === id);
+    if (!b) throw new Error("Brinde não encontrado.");
+    return b;
+  }
+
+  /** Grava o evento alterado e, se a roleta estiver parada esperando, redesenha/reavalia o esgotado. */
+  private async salvarEventoAlterado(novo: Evento): Promise<void> {
     await db.salvarEvento(this.exigirDb(), novo);
     this.set({ evento: novo });
     const f = this.estado.fase;
     if (f === "esgotado" || f === "atracao") this.irParaAtracao();
   }
 
+  /** Inclui um tipo de brinde novo no evento aberto (cadastro do administrador e tela de teste). */
+  /** Ids já usados no cadastro, nas jogadas ou nos ajustes (nunca reaproveitar). */
+  idsUsados(): Set<string> {
+    const { evento, jogadas, ajustes } = this.estado;
+    return new Set([...(evento?.brindes.map((b) => b.id) ?? []), ...jogadas.map((j) => j.brindeId), ...ajustes.map((a) => a.brindeId)]);
+  }
+
+  async adicionarBrinde(brinde: Brinde): Promise<void> {
+    const ev = this.eventoEditavel();
+    if (!brinde.id || this.idsUsados().has(brinde.id)) throw new Error(`Já existe um brinde com id "${brinde.id}".`);
+    if (ev.brindes.filter(brindeAtivo).length >= LIMITE_BRINDES) throw new Error(`A roleta comporta no máximo ${LIMITE_BRINDES} tipos de brinde.`);
+    if (!Number.isInteger(brinde.quantidade) || brinde.quantidade < 1) throw new Error("Quantidade inválida.");
+    const nome = brinde.nome.trim();
+    if (!nome) throw new Error("Digite o nome do brinde.");
+    const novo: Evento = { ...ev, brindes: [...ev.brindes, { ...brinde, nome, rotulo: brinde.rotulo.trim() || nome }] };
+    await this.salvarEventoAlterado(novo);
+  }
+
+  /** Muda nome e texto da fatia. Jogadas antigas guardam o nome da época (não mudam). */
+  async editarBrinde(id: string, dados: { nome: string; rotulo: string }): Promise<void> {
+    const ev = this.eventoEditavel();
+    this.exigirBrinde(ev, id);
+    const nome = dados.nome.trim();
+    const rotulo = dados.rotulo.trim();
+    if (!nome) throw new Error("Digite o nome do brinde.");
+    if (nome.length > LIMITE_NOME) throw new Error(`Nome com no máximo ${LIMITE_NOME} caracteres.`);
+    if (rotulo.length > LIMITE_ROTULO) throw new Error(`Texto na roleta com no máximo ${LIMITE_ROTULO} caracteres.`);
+    await this.salvarEventoAlterado({
+      ...ev,
+      brindes: ev.brindes.map((b) => (b.id === id ? { ...b, nome, rotulo: rotulo || nome } : b)),
+    });
+  }
+
+  /**
+   * Remove um tipo de brinde. Se ele já saiu em alguma jogada (mesmo estornada), não apaga:
+   * marca como desativado (some da roleta, fica no histórico e pode ser reativado).
+   */
+  async removerBrinde(id: string): Promise<"removido" | "desativado"> {
+    const ev = this.eventoEditavel();
+    this.exigirBrinde(ev, id);
+    // com jogada OU ajuste registrado, só desativa (apagar deixaria histórico órfão)
+    const saiu = this.estado.jogadas.some((j) => j.brindeId === id) || this.estado.ajustes.some((a) => a.brindeId === id);
+    const brindes = saiu ? ev.brindes.map((b) => (b.id === id ? { ...b, ativo: false } : b)) : ev.brindes.filter((b) => b.id !== id);
+    await this.salvarEventoAlterado({ ...ev, brindes });
+    return saiu ? "desativado" : "removido";
+  }
+
+  /** Devolve à roleta um brinde desativado. */
+  async reativarBrinde(id: string): Promise<void> {
+    const ev = this.eventoEditavel();
+    if (brindeAtivo(this.exigirBrinde(ev, id))) return;
+    if (ev.brindes.filter(brindeAtivo).length >= LIMITE_BRINDES) throw new Error(`A roleta comporta no máximo ${LIMITE_BRINDES} tipos de brinde.`);
+    await this.salvarEventoAlterado({
+      ...ev,
+      brindes: ev.brindes.map((b) => {
+        if (b.id !== id) return b;
+        const r = { ...b };
+        delete r.ativo;
+        return r;
+      }),
+    });
+  }
+
+  /** Sobe (-1) ou desce (+1) o brinde na lista: a ordem da lista é a ordem das fatias. */
+  async moverBrinde(id: string, direcao: -1 | 1): Promise<void> {
+    const ev = this.eventoEditavel();
+    const i = ev.brindes.findIndex((b) => b.id === id);
+    if (i < 0) throw new Error("Brinde não encontrado.");
+    const j = i + direcao;
+    if (j < 0 || j >= ev.brindes.length) return;
+    const brindes = [...ev.brindes];
+    [brindes[i], brindes[j]] = [brindes[j], brindes[i]];
+    await this.salvarEventoAlterado({ ...ev, brindes });
+  }
+
+  /** Renomeia o evento e/ou muda o modo de sorteio (vale para as próximas jogadas). */
+  async alterarEvento(dados: { nome?: string; modoSorteio?: ModoSorteio }): Promise<void> {
+    const ev = this.eventoEditavel();
+    const novo: Evento = { ...ev };
+    if (dados.nome !== undefined) {
+      const nome = dados.nome.trim();
+      if (!nome) throw new Error("Digite o nome do evento.");
+      if (nome.length > LIMITE_NOME) throw new Error(`Nome com no máximo ${LIMITE_NOME} caracteres.`);
+      novo.nome = nome;
+    }
+    if (dados.modoSorteio !== undefined) {
+      if (dados.modoSorteio !== "porTipo" && dados.modoSorteio !== "porUnidade") throw new Error("Modo de sorteio inválido.");
+      novo.modoSorteio = dados.modoSorteio;
+    }
+    await this.salvarEventoAlterado(novo);
+  }
+
   async ajustarEstoque(brindeId: string, delta: number): Promise<void> {
+    this.eventoEditavel();
     const banco = this.exigirDb();
     const ajuste = await db.adicionarAjuste(banco, brindeId, delta, delta > 0 ? "acréscimo manual" : "baixa manual", Date.now());
     this.set({ ajustes: [...this.estado.ajustes, ajuste] });

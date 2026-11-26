@@ -9,7 +9,7 @@ import { Admin } from "./Admin";
 import { CeuFundo } from "./CeuFundo";
 import { ligarGesto } from "./gesto";
 import { useKiosk } from "./kiosk";
-import { Painel } from "./Painel";
+import { CpfSaindo, Painel } from "./Painel";
 import { PainelTeste } from "./PainelTeste";
 import { ModoPalco, Preferencias, lerPreferencias, salvarPreferencias } from "./preferencias";
 import s from "./Totem.module.css";
@@ -74,6 +74,23 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
     if (estado.fase === "resultado" && !estado.retomada) som.brilho();
   }, [estado.fase, estado.retomada]);
 
+  // Confirmou o CPF: o cartão "descola" da tela enquanto a roleta chega.
+  const [cpfSaindo, setCpfSaindo] = useState<string | null>(null);
+  const faseAnterior = useRef(estado.fase);
+  const timerSaida = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    const antes = faseAnterior.current;
+    faseAnterior.current = estado.fase;
+    if (antes !== "cpf" || estado.fase !== "pronto" || estado.avulsa) return;
+    setCpfSaindo(estado.digitos);
+    som.brilho();
+    if (timerSaida.current) clearTimeout(timerSaida.current);
+    timerSaida.current = setTimeout(() => setCpfSaindo(null), 950);
+  }, [estado.fase, estado.digitos, estado.avulsa]);
+  useEffect(() => () => {
+    if (timerSaida.current) clearTimeout(timerSaida.current);
+  }, []);
+
   useEffect(() => {
     const el = celulaRef.current;
     if (!el) return;
@@ -133,6 +150,9 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
   );
 
   const modo: ModoPalco = prefs.modo === "3d" && !motivo3d ? "3d" : "2d";
+  const comRoleta = estado.fase === "pronto" || estado.fase === "girando" || estado.fase === "resultado";
+  // atração e CPF são a mesma tela: não remonta (nem reanima) o painel ao digitar o 1º número
+  const chavePainel = estado.fase === "atracao" || estado.fase === "cpf" ? "cpf" : estado.fase;
 
   return (
     <>
@@ -142,14 +162,15 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
           <Palco3D store={store} fatias={estado.fatias} fase={estado.fase} leve={prefs.leve} celulaRef={celulaRef} aoFalhar={falhou3d} />
         </GuardaPalco>
       )}
-      <main className={`${s.totem} ${modo === "3d" ? s.modo3d : ""}`}>
+      <main className={`${s.totem} ${modo === "3d" ? s.modo3d : ""} ${comRoleta ? "" : s.semRoleta}`}>
         <div ref={celulaRef} className={s.celula} data-roleta>
           {modo === "2d" && <Palco2D store={store} fatias={estado.fatias} fase={estado.fase} leve={prefs.leve} />}
         </div>
         <div className={s.lado}>
-          <Painel key={estado.fase} store={store} estado={estado} abrirAdmin={abrirAdmin} />
+          <Painel key={chavePainel} store={store} estado={estado} abrirAdmin={abrirAdmin} />
         </div>
       </main>
+      {cpfSaindo && <CpfSaindo digitos={cpfSaindo} />}
       <div className={s.cantoAdmin} onPointerDown={toqueCanto} aria-hidden />
       {demo && (
         <PainelTeste

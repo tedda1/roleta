@@ -1,0 +1,129 @@
+.teclado {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+  padding: 10px;
+  border-radius: 16px;
+  background: rgba(5, 13, 36, 0.55);
+  border: 1px solid rgba(105, 130, 176, 0.3);
+}
+
+.linha {
+  display: flex;
+  gap: 6px;
+}
+
+.recuo {
+  padding: 0 4%;
+}
+
+.acentos {
+  padding-top: 4px;
+  border-top: 1px dashed rgba(105, 130, 176, 0.3);
+}
+
+.tecla {
+  flex: 1 1 0;
+  min-width: 44px;
+  min-height: 52px;
+  padding: 0 4px;
+  border-radius: 12px;
+  border: 1px solid rgba(169, 187, 234, 0.35);
+  background: linear-gradient(180deg, rgba(55, 66, 84, 0.95), rgba(17, 32, 61, 0.95));
+  color: #fff;
+  font-family: var(--fonte-texto);
+  font-size: 22px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16), 0 3px 0 #070d22;
+  transition: transform 60ms ease, background-color 60ms ease;
+  cursor: pointer;
+  touch-action: manipulation;
+}
+
+.tecla:active:not(:disabled) {
+  transform: translateY(2px);
+  background: linear-gradient(180deg, rgba(105, 130, 176, 0.95), rgba(10, 34, 72, 0.95));
+}
+
+.tecla:disabled {
+  opacity: 0.35;
+}
+
+.acao {
+  font-size: 17px;
+  color: #c9d6ff;
+}
+
+.larga {
+  flex-grow: 1.8;
+}
+
+.espaco {
+  flex-grow: 5;
+}
+
+.sinal {
+  color: #c9d6ff;
+}
+
+.ligada {
+  background: #6982b0;
+  border-color: #a9bbea;
+  color: #fff;
+}
+
+/* ---------- campo ---------- */
+
+.campo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.rotuloCampo {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 16px;
+  color: #a9bbea;
+}
+
+.contador {
+  font-variant-numeric: tabular-nums;
+  color: #a9bbea;
+}
+
+.contadorCheio {
+  color: #ffd23f;
+}
+
+.entrada {
+  min-height: 56px;
+  width: 100%;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 2px solid rgba(105, 130, 176, 0.45);
+  background: rgba(5, 13, 36, 0.6);
+  color: #fff;
+  font-family: var(--fonte-texto);
+  font-size: 22px;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+}
+
+.entrada::placeholder {
+  color: rgba(201, 214, 255, 0.45);
+}
+
+.campoAtivo .entrada {
+  border-color: #a9bbea;
+  box-shadow: 0 0 0 3px rgba(105, 130, 176, 0.35);
+}
+
+.dica {
+  font-size: 14px;
+  color: #a9bbea;
+}

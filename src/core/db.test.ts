@@ -162,6 +162,23 @@ describe("backup", () => {
     expect((await db.carregar(pc1)).jogadas).toHaveLength(1);
   });
 
+  it("importar backup antigo do mesmo evento mantém o cadastro atual", async () => {
+    const banco = await novoBanco();
+    const antigo = db.montarBackup(await db.carregar(banco), 1);
+    // depois do backup: voucher desativado e um brinde novo cadastrado
+    const atual = (await db.carregar(banco)).evento!;
+    await db.salvarEvento(banco, {
+      ...atual,
+      brindes: [
+        ...atual.brindes.map((b) => (b.id === "voucher" ? { ...b, ativo: false } : b)),
+        { id: "novo", nome: "Novo", rotulo: "Novo", quantidade: 2 },
+      ],
+    });
+    const d = await db.importarBackup(banco, antigo, false);
+    const ids = itensSorteaveis(d.evento!, d.jogadas, d.ajustes).map((i) => i.id);
+    expect(ids).toEqual(["caneca", "fone", "novo"]); // voucher continua desativado; novo continua lá
+  });
+
   it("não substitui outro evento sem confirmação", async () => {
     const banco = await novoBanco(evento({ id: "outro" }));
     const backup = db.montarBackup({ evento: evento(), jogadas: [], ajustes: [] }, 1);

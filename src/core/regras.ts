@@ -8,6 +8,8 @@ export interface Brinde {
   /** texto curto que vai na fatia (até ~16 caracteres) */
   rotulo: string;
   quantidade: number;
+  /** false = desativado pelo administrador (já saiu em jogadas, então não é apagado); não entra na roleta */
+  ativo?: boolean;
 }
 
 /** Arquivo public/brindes.json editado pelo organizador. */
@@ -29,7 +31,7 @@ export interface Evento {
   pinHash: string;
   modoSorteio: ModoSorteio;
   som: boolean;
-  /** lista congelada na abertura do evento */
+  /** lista do evento, na ordem das fatias (o administrador pode editar durante o evento) */
   brindes: Brinde[];
 }
 
@@ -74,6 +76,36 @@ export class ErroRegra extends Error {
 }
 
 export const LIMITE_BRINDES = 24;
+/** Texto da fatia digitado no cadastro (vazio = usa o nome). */
+export const LIMITE_ROTULO = 16;
+export const LIMITE_NOME = 60;
+
+/** Brinde que pode entrar na roleta (desativados ficam só no histórico). */
+export function brindeAtivo(b: Brinde): boolean {
+  return b.ativo !== false;
+}
+
+/** "Caneca Constelação" -> "caneca-constelacao" (sem acentos, só letras, números e hífen). */
+export function slug(texto: string): string {
+  return texto
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 32)
+    .replace(/-+$/g, "");
+}
+
+/** Id novo para um brinde: slug do nome + sufixo curto aleatório, nunca repetido em `existentes`. */
+export function idBrinde(nome: string, existentes: Iterable<string>): string {
+  const usados = new Set(existentes);
+  const base = slug(nome) || "brinde";
+  for (;;) {
+    const id = `${base}-${novoId().slice(0, 4)}`;
+    if (!usados.has(id)) return id;
+  }
+}
 
 /** Valida o brindes.json. Retorna a lista de problemas (vazia = ok). */
 export function validarConfig(bruto: unknown): { config: ConfigBrindes | null; erros: string[] } {
@@ -99,11 +131,16 @@ export function validarConfig(bruto: unknown): { config: ConfigBrindes | null; e
     else if (ids.has(id)) erros.push(`brinde ${i + 1}: id "${id}" repetido.`);
     if (!nome) erros.push(`brinde ${i + 1}: nome vazio.`);
     if (!Number.isInteger(quantidade) || quantidade < 0) erros.push(`brinde ${i + 1}: quantidade inválida.`);
+    if (item.ativo !== undefined && typeof item.ativo !== "boolean") erros.push(`brinde ${i + 1}: ativo deve ser true ou false.`);
     ids.add(id);
-    brindes.push({ id, nome, rotulo, quantidade: Number.isInteger(quantidade) ? quantidade : 0 });
+    const brinde: Brinde = { id, nome, rotulo, quantidade: Number.isInteger(quantidade) ? quantidade : 0 };
+    if (item.ativo === false) brinde.ativo = false;
+    brindes.push(brinde);
   });
+  const ativos = brindes.filter(brindeAtivo).length;
   if (lista && brindes.length === 0) erros.push("Cadastre ao menos um brinde.");
-  if (brindes.length > LIMITE_BRINDES) erros.push(`No máximo ${LIMITE_BRINDES} tipos de brinde.`);
+  else if (lista && ativos === 0) erros.push("Todos os brindes estão desativados.");
+  if (ativos > LIMITE_BRINDES) erros.push(`No máximo ${LIMITE_BRINDES} tipos de brinde.`);
   if (erros.length) return { config: null, erros };
   return { config: { evento, pin, modoSorteio, som, brindes }, erros };
 }
@@ -127,11 +164,11 @@ export function calcularEstoque(evento: Evento, jogadas: readonly Jogada[], ajus
   return estoque;
 }
 
-/** Fatias sorteáveis agora, na ordem do cadastro. porTipo: peso 1; porUnidade: peso = estoque. */
+/** Fatias sorteáveis agora, na ordem do cadastro (sem os desativados). porTipo: peso 1; porUnidade: peso = estoque. */
 export function itensSorteaveis(evento: Evento, jogadas: readonly Jogada[], ajustes: readonly Ajuste[]): ItemFatia[] {
   const estoque = calcularEstoque(evento, jogadas, ajustes);
   return evento.brindes
-    .filter((b) => (estoque.get(b.id) ?? 0) > 0)
+    .filter((b) => brindeAtivo(b) && (estoque.get(b.id) ?? 0) > 0)
     .map((b) => ({
       id: b.id,
       nome: b.nome,

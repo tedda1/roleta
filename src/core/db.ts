@@ -216,6 +216,7 @@ export function validarBackup(b: unknown): asserts b is Backup {
   }
   for (const br of ev.brindes) {
     if (!ehTexto(br?.id) || !ehTexto(br?.nome) || !Number.isInteger(br?.quantidade) || br.quantidade < 0) throw erro("brinde inválido.");
+    if (br.ativo !== undefined && typeof br.ativo !== "boolean") throw erro("brinde inválido.");
   }
   if (!Array.isArray(x.jogadas) || !Array.isArray(x.ajustes)) throw erro("listas ausentes.");
   for (const j of x.jogadas) {
@@ -273,9 +274,31 @@ export async function importarBackup(db: IDBDatabase, b: unknown, substituir: bo
     throw new Error(`O mesmo CPF aparece em ${duplicadas.length} pares de jogadas (dois PCs no mesmo evento?). Importação cancelada.`);
   }
 
+  // Mesmo evento: o cadastro ATUAL vence (ele pode ter sido editado depois do backup).
+  // Brindes que só existem no backup entram desativados, para não reativar nada sem querer.
+  let evento: Evento = b.evento!;
+  if (mesmo && atual.evento) {
+    const brindes = atual.evento.brindes.map((x) => ({ ...x }));
+    const ids = new Set(brindes.map((x) => x.id));
+    for (const br of b.evento!.brindes) {
+      if (!ids.has(br.id)) {
+        brindes.push({ ...br, ativo: false });
+        ids.add(br.id);
+      }
+    }
+    // Toda jogada/ajuste precisa apontar para um brinde do cadastro (senão o estoque fica órfão).
+    for (const j of jogadas.values()) {
+      if (!ids.has(j.brindeId)) {
+        brindes.push({ id: j.brindeId, nome: j.brindeNome, rotulo: j.brindeNome, quantidade: 0, ativo: false });
+        ids.add(j.brindeId);
+      }
+    }
+    evento = { ...atual.evento, brindes };
+  }
+
   const t = tx(db, "readwrite");
   for (const l of LOJAS) t.objectStore(l).clear();
-  t.objectStore("evento").put(b.evento);
+  t.objectStore("evento").put(evento);
   for (const j of jogadas.values()) t.objectStore("jogadas").put(j);
   for (const a of ajustes.values()) t.objectStore("ajustes").put(a);
   await fim(t);

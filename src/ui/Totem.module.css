@@ -38,6 +38,23 @@
   }
 }
 
+/* Telas sem roleta (CPF, evento fechado, esgotado...): painel no centro, roleta escondida.
+   A célula continua no layout para a cena 3D saber onde a roleta vai chegar. */
+.semRoleta .celula {
+  visibility: hidden;
+}
+
+.semRoleta .lado {
+  position: fixed;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  padding: max(4vmin, 16px);
+  overflow: auto;
+  touch-action: pan-y;
+}
+
 .cantoAdmin {
   position: fixed;
   left: 0;

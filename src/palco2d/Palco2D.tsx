@@ -3,7 +3,7 @@
  * Roleta 2D com detalhes 3D. Custo por quadro: UMA escrita de transform no disco
  * (e no ponteiro quando ele balança). Sem repaint: a face é um canvas pré-desenhado.
  */
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { desenharFace } from "@/arte/face";
 import { Fatia, anguloAtual, fatiaSobPonteiro } from "@/core/geometria";
 import type { Fase, TotemStore } from "@/core/totem";
@@ -21,6 +21,24 @@ export default function Palco2D({ store, fatias, fase, leve }: Props) {
   const faceRef = useRef<HTMLCanvasElement>(null);
   const ponteiroRef = useRef<HTMLDivElement>(null);
   const fatiasRef = useRef(fatias);
+
+  // Animação de chegada só na transição real CPF -> pronto (não ao montar/recarregar,
+  // e é interrompida se o giro começar antes de ela terminar).
+  const [chegando, setChegando] = useState(false);
+  const faseAnterior = useRef<Fase | null>(null);
+  useEffect(() => {
+    const antes = faseAnterior.current;
+    faseAnterior.current = fase;
+    const semRoleta = (f: Fase) => f !== "pronto" && f !== "girando" && f !== "resultado";
+    if (fase === "pronto" && antes !== null && antes !== "carregando" && semRoleta(antes)) {
+      setChegando(true);
+      const t = setTimeout(() => setChegando(false), 1700);
+      return () => {
+        clearTimeout(t);
+        setChegando(false);
+      };
+    }
+  }, [fase]);
 
   // Redesenha a face só quando as fatias ou o tamanho mudam.
   useEffect(() => {
@@ -85,7 +103,13 @@ export default function Palco2D({ store, fatias, fase, leve }: Props) {
     return () => cancelAnimationFrame(quadro);
   }, [store]);
 
-  const classe = [s.raiz, leve ? s.leve : "", fase === "resultado" ? s.vitoria : "", fase === "pronto" ? s.pronto : ""].join(" ");
+  const classe = [
+    s.raiz,
+    leve ? s.leve : "",
+    chegando && fase === "pronto" ? s.chegou : "",
+    fase === "resultado" ? s.vitoria : "",
+    fase === "pronto" ? s.pronto : "",
+  ].join(" ");
 
   return (
     <div ref={raizRef} className={classe} aria-hidden>

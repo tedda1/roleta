@@ -27,6 +27,45 @@
   transition: none;
 }
 
+/* Chegada da roleta depois do CPF: vem de longe, deitada, e "levanta" em perspectiva
+   (versão leve, só transform/opacity, da animação 3D). */
+.chegou {
+  animation: chegar 1300ms cubic-bezier(0.2, 0.9, 0.25, 1.12) both;
+}
+
+.chegou .aro,
+.chegou .cubo {
+  animation: crescer 700ms cubic-bezier(0.3, 1.6, 0.5, 1) 650ms both;
+}
+
+.chegou .ponteiro {
+  animation: cairPonteiro 650ms cubic-bezier(0.3, 1.5, 0.5, 1) 900ms both;
+}
+
+@keyframes chegar {
+  0% { opacity: 0; transform: perspective(1200px) translateY(18%) rotateX(78deg) scale(0.35); }
+  45% { opacity: 1; }
+  100% { opacity: 1; transform: none; }
+}
+
+@keyframes crescer {
+  from { opacity: 0; scale: 0.6; }
+  to { opacity: 1; scale: 1; }
+}
+
+@keyframes cairPonteiro {
+  from { opacity: 0; translate: 0 -60%; }
+  to { opacity: 1; translate: 0 0; }
+}
+
+.leve.chegou,
+.leve.chegou .aro,
+.leve.chegou .cubo,
+.leve.chegou .ponteiro {
+  animation-duration: 500ms;
+  animation-delay: 0ms;
+}
+
 .halo {
   position: absolute;
   inset: -12%;
@@ -187,7 +226,11 @@
 
 @media (prefers-reduced-motion: reduce) {
   .vitoria .pulso,
-  .vitoria .estrela {
+  .vitoria .estrela,
+  .chegou,
+  .chegou .aro,
+  .chegou .cubo,
+  .chegou .ponteiro {
     animation: none;
   }
 }

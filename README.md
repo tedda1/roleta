@@ -6,6 +6,10 @@ feita para rodar numa **tela touch** (totem) em um PC desconhecido, **sem intern
 - **Versão 2D com detalhes 3D** (`/`): roleta em canvas com perspectiva, espessura, aro metálico, brilho e céu da identidade visual. Leve: só anima `transform`.
 - **Versão 3D interativa** (`/3d/`): three.js; a roleta "descola" da tela e ganha volume, câmera viva com parallax, agarrar-e-lançar com o dedo, faíscas ao tocar o céu e revelação com estrelas que formam uma estrela. Se o PC não aguentar, cai sozinha para o 2D sem perder nada.
 - **Diagnóstico** (`/diagnostico/`): roda no PC do evento e diz se use 2D ou 3D.
+- **Teste 3D** (`/teste-3d/`): a versão 3D com **dados de exemplo**, num banco separado (nunca mexe no
+  evento real). Abre sozinha com 8 brindes e traz uma barra de controles: *CPF de teste*, *Girar*,
+  *Automático* (joga sem parar, ótimo para ver a roleta encolher e medir desempenho), *Reiniciar brindes*,
+  troca 2D/3D, modo leve e um medidor de quadros por segundo. PIN do administrador da demonstração: `1234`.
 
 ## Regras do sorteio
 

@@ -2,6 +2,7 @@
 import dynamic from "next/dynamic";
 import { Component, ReactNode, useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { som } from "@/audio/som";
+import { CONFIG_DEMO, OPCOES_DEMO } from "@/core/demo";
 import { TotemStore } from "@/core/totem";
 import Palco2D from "@/palco2d/Palco2D";
 import { Admin } from "./Admin";
@@ -9,6 +10,7 @@ import { CeuFundo } from "./CeuFundo";
 import { ligarGesto } from "./gesto";
 import { useKiosk } from "./kiosk";
 import { Painel } from "./Painel";
+import { PainelTeste } from "./PainelTeste";
 import { ModoPalco, Preferencias, lerPreferencias, salvarPreferencias } from "./preferencias";
 import s from "./Totem.module.css";
 
@@ -29,8 +31,14 @@ class GuardaPalco extends Component<{ aoFalhar: (m: string) => void; children: R
   }
 }
 
-export default function Totem({ modoInicial }: { modoInicial?: ModoPalco }) {
-  const [store] = useState(() => new TotemStore());
+interface PropsTotem {
+  modoInicial?: ModoPalco;
+  /** Tela de teste: banco separado, dados de exemplo e barra de controles. */
+  demo?: boolean;
+}
+
+export default function Totem({ modoInicial, demo = false }: PropsTotem) {
+  const [store] = useState(() => new TotemStore(undefined, demo ? OPCOES_DEMO : {}));
   const estado = useSyncExternalStore(store.assinar, store.getEstado, store.getEstado);
   const [prefs, setPrefs] = useState<Preferencias>({ modo: modoInicial ?? "2d", leve: false });
   const [motivo3d, setMotivo3d] = useState<string | null>(null);
@@ -41,7 +49,8 @@ export default function Totem({ modoInicial }: { modoInicial?: ModoPalco }) {
   useKiosk();
 
   useEffect(() => {
-    const p = lerPreferencias();
+    // A tela de teste não lê nem grava as preferências do totem real.
+    const p = demo ? { modo: modoInicial ?? "3d", leve: false, salvo: false } : lerPreferencias();
     const q = new URLSearchParams(location.search);
     const modoUrl = q.get("modo");
     // eslint-disable-next-line react-hooks/set-state-in-effect -- preferências só existem no navegador
@@ -50,8 +59,11 @@ export default function Totem({ modoInicial }: { modoInicial?: ModoPalco }) {
       modo: modoUrl === "2d" || modoUrl === "3d" ? modoUrl : p.salvo ? p.modo : (modoInicial ?? p.modo),
       leve: q.get("leve") === "1" || p.leve,
     });
-    void store.iniciar();
-  }, [store, modoInicial]);
+    void store.iniciar().then(async () => {
+      // Demonstração: abre o evento de exemplo sozinho na primeira vez.
+      if (demo && store.getEstado().fase === "semEvento") await store.abrirEvento(CONFIG_DEMO).catch(console.error);
+    });
+  }, [store, modoInicial, demo]);
 
   useEffect(() => store.definirMovimentoOcioso(!prefs.leve), [store, prefs.leve]);
   useEffect(() => {
@@ -106,16 +118,19 @@ export default function Totem({ modoInicial }: { modoInicial?: ModoPalco }) {
 
   const mudarPrefs = (p: Preferencias) => {
     setPrefs(p);
-    salvarPreferencias(p);
+    if (!demo) salvarPreferencias(p);
     if (p.modo === "3d") setMotivo3d(null);
   };
 
-  const falhou3d = useCallback((m: string) => {
-    console.warn("3D desativado:", m);
-    setMotivo3d(m);
-    // lembra a queda para não repetir a tentativa a cada recarga
-    salvarPreferencias({ ...lerPreferencias(), modo: "2d" });
-  }, []);
+  const falhou3d = useCallback(
+    (m: string) => {
+      console.warn("3D desativado:", m);
+      setMotivo3d(m);
+      // lembra a queda para não repetir a tentativa a cada recarga (só no totem real)
+      if (!demo) salvarPreferencias({ ...lerPreferencias(), modo: "2d" });
+    },
+    [demo],
+  );
 
   const modo: ModoPalco = prefs.modo === "3d" && !motivo3d ? "3d" : "2d";
 
@@ -136,6 +151,17 @@ export default function Totem({ modoInicial }: { modoInicial?: ModoPalco }) {
         </div>
       </main>
       <div className={s.cantoAdmin} onPointerDown={toqueCanto} aria-hidden />
+      {demo && (
+        <PainelTeste
+          store={store}
+          estado={estado}
+          modo={modo}
+          leve={prefs.leve}
+          motivo3d={motivo3d}
+          alternarModo={() => mudarPrefs({ ...prefs, modo: modo === "3d" ? "2d" : "3d" })}
+          alternarLeve={() => mudarPrefs({ ...prefs, leve: !prefs.leve })}
+        />
+      )}
       {admin && <Admin store={store} estado={estado} prefs={prefs} mudarPrefs={mudarPrefs} motivo3d={motivo3d} fechar={fecharAdmin} />}
     </>
   );

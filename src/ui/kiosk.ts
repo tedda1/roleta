@@ -34,7 +34,8 @@ export function useKiosk(): void {
     const primeiroToque = () => {
       som.desbloquear();
       if (!trava) void pedirTela();
-      if (process.env.NODE_ENV === "production" && !document.fullscreenElement && !location.search.includes("janela")) {
+      const telaDeTeste = location.pathname.startsWith("/teste-3d") || location.search.includes("janela");
+      if (process.env.NODE_ENV === "production" && !document.fullscreenElement && !telaDeTeste) {
         document.documentElement.requestFullscreen?.().catch(() => {});
       }
     };

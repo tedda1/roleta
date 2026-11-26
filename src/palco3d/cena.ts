@@ -707,7 +707,7 @@ export class Cena {
   /** Tocar o céu (fora da roleta e do painel) solta faíscas. */
   private tocarFundo = (e: PointerEvent) => {
     const alvo = e.target as HTMLElement | null;
-    if (alvo?.closest("section, button, [data-roleta], [role=dialog]")) return;
+    if (alvo?.closest("section, button, aside, [data-roleta], [data-ui], [role=dialog]")) return;
     const v = new Vector3((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1, 0.5);
     v.unproject(this.camera);
     const dir = v.sub(this.camera.position).normalize();

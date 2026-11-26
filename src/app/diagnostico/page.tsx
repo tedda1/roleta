@@ -81,6 +81,9 @@ export default function Diagnostico() {
         <Link href="/3d/" style={{ color: "#ffd23f", fontSize: 20 }}>
           Abrir roleta 3D
         </Link>
+        <Link href="/teste-3d/" style={{ color: "#ffd23f", fontSize: 20 }}>
+          Testar 3D com dados de exemplo
+        </Link>
       </p>
     </main>
   );

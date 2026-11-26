@@ -91,7 +91,11 @@ export class TotemStore {
   /** Rotação atual da roleta (lida pelos palcos em requestAnimationFrame). */
   rotacao: Rotacao = { tipo: "ocioso", base: 0, t0: 0, omega: this.omegaOcioso };
 
-  constructor(private relogio: () => number = () => performance.now()) {}
+  constructor(
+    private relogio: () => number = () => performance.now(),
+    /** Banco e trava separados (a tela de teste nunca toca nos dados do evento real). */
+    private opcoes: { nomeDb?: string; nomeTrava?: string } = {},
+  ) {}
 
   // ---------- assinatura ----------
   getEstado = (): EstadoTotem => this.estado;
@@ -135,7 +139,7 @@ export class TotemStore {
       if (typeof indexedDB === "undefined") throw new Error("IndexedDB indisponível neste navegador.");
       // Se outra janela da roleta estiver aberta, espera ela fechar e continua sozinha.
       await this.obterTrava(() => this.set({ fase: "outraJanela" }));
-      this.db = await db.abrirDb();
+      this.db = await db.abrirDb(indexedDB, this.opcoes.nomeDb);
       const persistido = await navigator.storage?.persist?.().catch(() => false);
       const dados = await db.carregar(this.db);
       try {
@@ -152,7 +156,7 @@ export class TotemStore {
   private obterTrava(aoEsperar: () => void): Promise<void> {
     const locks = (navigator as Navigator & { locks?: LockManager }).locks;
     if (!locks) return Promise.resolve();
-    const nome = "roleta-constelacao-instancia";
+    const nome = this.opcoes.nomeTrava ?? "roleta-constelacao-instancia";
     const segurar = () => new Promise<void>(() => {}); // mantém a trava enquanto a página existir
     return new Promise((resolve) => {
       locks

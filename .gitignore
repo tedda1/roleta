@@ -1,0 +1,35 @@
+# dependências
+/node_modules
+/.pnp
+.pnp.*
+
+# build
+/.next/
+/out/
+/build
+/pacote-totem/
+*.tsbuildinfo
+next-env.d.ts
+
+# testes
+/coverage
+
+# config real do evento (PIN e lista de brindes) — versionamos só o exemplo
+/public/brindes.json
+
+# backups exportados da roleta contêm códigos derivados de CPF
+roleta-backup-*.json
+
+# fontes comerciais (licença): não versionar
+/public/fonts/*.woff2
+/public/fonts/*.woff
+/public/fonts/*.ttf
+/public/fonts/*.otf
+
+# sistema / editores
+.DS_Store
+Thumbs.db
+*.pem
+.vercel
+.env*
+npm-debug.log*

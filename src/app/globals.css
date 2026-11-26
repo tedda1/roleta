@@ -1,0 +1,59 @@
+/* Fonte principal da identidade (Resagokr). Coloque os arquivos em public/fonts/
+   (veja public/fonts/LEIA-ME.txt). Sem eles, usamos a fonte reserva definida no layout. */
+@font-face {
+  font-family: "Resagokr";
+  src: url("/fonts/Resagokr-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Resagokr";
+  src: url("/fonts/Resagokr-Bold.woff2") format("woff2");
+  font-weight: 600 800;
+  font-display: swap;
+}
+
+:root {
+  --branco: #ffffff;
+  --azul-claro: #6982b0;
+  --cinza-azulado: #616d85;
+  --ardosia: #4c5262;
+  --grafite: #374254;
+  --azul-profundo: #0a2248;
+  --noite: #11203d;
+  --meia-noite: #1c2134;
+
+  --fonte-titulo: "Resagokr", var(--fonte-titulo-reserva), system-ui, sans-serif;
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--azul-profundo);
+  color: var(--branco);
+  font-family: var(--fonte-texto), Georgia, serif;
+  /* totem: sem zoom, sem rolagem elástica, sem seleção */
+  touch-action: none;
+  overscroll-behavior: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-touch-callout: none;
+}
+
+button {
+  font: inherit;
+  touch-action: manipulation;
+}
+
+canvas {
+  touch-action: none;
+}

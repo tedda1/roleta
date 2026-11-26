@@ -1,0 +1,45 @@
+﻿ROLETA CONSTELAÇÃO — GUIA RÁPIDO DO DIA DO EVENTO
+==================================================
+
+ANTES DO EVENTO (no PC do totem, com antecedência)
+ 1. Copie esta pasta inteira para o disco do PC (ex.: C:\RoletaConstelacao). Não rode do pendrive.
+ 2. Dê dois cliques em INICIAR.cmd. A roleta abre em tela cheia.
+    Para a versão 3D: abra um terminal na pasta e rode  INICIAR.cmd 3d
+ 3. Com teclado: Ctrl+Shift+A abre o administrador. Sem teclado: toque 5 vezes
+    seguidas no canto superior esquerdo da tela.
+ 4. No administrador, abra "Diagnóstico do PC". Se a GPU não for aprovada, use a 2D.
+ 5. Abra o evento (Administrador > Evento > Abrir evento). O PIN está no brindes.json.
+ 6. Faça um ensaio com alguns CPFs da equipe. Depois: Exportar backup e
+    "Encerrar evento e apagar dados". Abra o evento de novo antes de liberar ao público.
+ 7. Desligue suspensão, protetor de tela e notificações do Windows.
+    Se possível, instale o Google Chrome (o modo quiosque do Chrome é o mais seguro).
+    Com acesso de administrador, desative os gestos de borda da tela touch:
+    registro HKLM\SOFTWARE\Policies\Microsoft\Windows\EdgeUI, valor DWORD AllowEdgeSwipe = 0
+    (reinicie o PC depois).
+
+NO DIA
+ - Sempre abra pelo INICIAR.cmd. Ele usa SEMPRE o mesmo endereço (http://localhost:4173)
+   e o mesmo perfil do navegador. Os CPFs usados e as jogadas ficam guardados nesse perfil.
+ - NUNCA abra a roleta pelo Edge com "--kiosk" nem em janela anônima: os dados somem.
+ - Exporte um backup de tempos em tempos (Administrador > Exportar backup).
+ - Se o brinde não estiver disponível: Administrador > Jogadas > Estornar
+   ("Devolver brinde" volta o item para a roleta; "Brinde perdido" não volta). O CPF é liberado.
+ - Quem não tem CPF: Administrador > "Liberar jogada sem CPF".
+ - Para sair do modo tela cheia: Alt+F4 (teclado guardado junto ao totem).
+
+SE ALGO DER ERRADO
+ - Tela travada / fechou: feche a roleta (Alt+F4) e rode INICIAR.cmd de novo. Uma jogada
+   interrompida reaparece como resultado (ninguém joga duas vezes, nenhum brinde se perde).
+ - Apareceu "Roleta já aberta": há outra janela da roleta aberta. Feche a outra (Alt+F4);
+   esta continua sozinha.
+ - PC lento: Administrador > Modo leve, ou volte para a versão 2D.
+ - Trocar de PC: exporte o backup no PC antigo e importe no novo (Administrador > Importar).
+ - O servidor não sobe: o INICIAR.cmd já tenta o Python sozinho, se ele estiver instalado.
+   Se precisar subir à mão: python -m http.server 4173 --bind 127.0.0.1 --directory site
+   deixe essa janela aberta e rode INICIAR.cmd de novo (NÃO abra o navegador comum:
+   ele usa outro perfil e a roleta aparece zerada).
+
+DEPOIS DO EVENTO
+ - Exporte o backup final e use "Encerrar evento e apagar dados".
+ - Apague também os backups baixados (pasta Downloads) quando não forem mais necessários:
+   eles contêm códigos derivados de CPF (dado pessoal).

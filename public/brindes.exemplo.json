@@ -1,0 +1,16 @@
+{
+  "evento": "Convenção 2026 · Constelação OncologyGroup",
+  "pin": "202612",
+  "modoSorteio": "porTipo",
+  "som": true,
+  "brindes": [
+    { "id": "fone", "nome": "Fone de ouvido Bluetooth", "rotulo": "Fone Bluetooth", "quantidade": 3 },
+    { "id": "smartwatch", "nome": "Smartwatch", "rotulo": "Smartwatch", "quantidade": 1 },
+    { "id": "caneca", "nome": "Caneca Constelação", "rotulo": "Caneca", "quantidade": 15 },
+    { "id": "garrafa", "nome": "Garrafa térmica", "rotulo": "Garrafa térmica", "quantidade": 10 },
+    { "id": "kit-spa", "nome": "Kit spa relaxante", "rotulo": "Kit spa", "quantidade": 4 },
+    { "id": "voucher", "nome": "Voucher jantar para dois", "rotulo": "Jantar a dois", "quantidade": 2 },
+    { "id": "caixa-som", "nome": "Caixa de som portátil", "rotulo": "Caixa de som", "quantidade": 2 },
+    { "id": "folga", "nome": "Day off (folga de um dia)", "rotulo": "Day off", "quantidade": 2 }
+  ]
+}

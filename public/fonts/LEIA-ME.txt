@@ -1,0 +1,11 @@
+Fonte principal da identidade visual: Resagokr (no PDF aparece como "RESAGORK").
+
+Coloque aqui os arquivos, com estes nomes exatos:
+  Resagokr-Regular.woff2
+  Resagokr-Bold.woff2
+
+Enquanto eles não existirem, a roleta usa a fonte reserva "Jura" (Google Fonts, embutida no build).
+Confira a licença antes de versionar os arquivos no repositório.
+
+The Seasons (fonte secundária do PDF) é comercial: só use com licença de uso web.
+Os textos usam Inria Serif (Google Fonts, licença OFL), também indicada no PDF.

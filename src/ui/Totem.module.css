@@ -1,0 +1,49 @@
+.totem {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1.12fr) minmax(0, 0.88fr);
+  align-items: center;
+  justify-items: center;
+  gap: 3vmin;
+  /* margem segura: nada tocável colado nas bordas (gestos do Windows) */
+  padding: max(5vmin, 24px);
+}
+
+.celula {
+  position: relative;
+  width: min(80vh, 100%);
+  aspect-ratio: 1;
+  touch-action: none;
+}
+
+.lado {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  max-height: 100%;
+}
+
+@media (orientation: portrait) {
+  .totem {
+    grid-template-columns: 1fr;
+    grid-template-rows: minmax(0, 1fr) auto;
+    align-content: center;
+  }
+
+  .celula {
+    width: min(84vw, 46vh);
+  }
+}
+
+.cantoAdmin {
+  position: fixed;
+  left: 0;
+  top: 0;
+  width: 90px;
+  height: 90px;
+  z-index: 40;
+  touch-action: none;
+}

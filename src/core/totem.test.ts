@@ -143,6 +143,19 @@ describe("TotemStore", () => {
     expect(e.aviso).toMatch(/equipe/);
   });
 
+  it("incluir brinde no evento aberto aumenta a roleta e vale para o sorteio", async () => {
+    const { store, banco } = await preparar();
+    await store.abrirEvento(CONFIG);
+    expect(store.getEstado().fatias).toHaveLength(2);
+    await store.adicionarBrinde({ id: "c", nome: "Brinde C", rotulo: "C", quantidade: 1 });
+    expect(store.getEstado().fatias.map((f) => f.id)).toEqual(["a", "b", "c"]);
+    await expect(store.adicionarBrinde({ id: "c", nome: "Outro", rotulo: "", quantidade: 1 })).rejects.toThrow(/Já existe/);
+    // persiste: nova instância enxerga o brinde novo
+    const s2 = new TotemStore();
+    await s2.iniciarComDb(banco);
+    expect(s2.getEstado().fatias).toHaveLength(3);
+  });
+
   it("jogada avulsa liberada pelo admin não exige CPF", async () => {
     const { store, banco } = await preparar();
     await store.abrirEvento(CONFIG);

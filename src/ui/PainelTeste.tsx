@@ -4,7 +4,8 @@
  * jogadas automáticas, reinício e medidor de quadros. Nunca aparece no totem real.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CONFIG_DEMO, gerarCpfTeste } from "@/core/demo";
+import { CONFIG_DEMO, gerarCpfTeste, proximoBrindeExtra } from "@/core/demo";
+import { LIMITE_BRINDES } from "@/core/regras";
 import type { EstadoTotem, TotemStore } from "@/core/totem";
 import type { ModoPalco } from "./preferencias";
 import s from "./PainelTeste.module.css";
@@ -45,6 +46,18 @@ export function PainelTeste({ store, estado, modo, leve, motivo3d, alternarModo,
       await store.encerrarEvento();
       await store.abrirEvento(CONFIG_DEMO);
       setMsg("Demonstração reiniciada com os brindes de exemplo.");
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    }
+  }, [store]);
+
+  const adicionarBrinde = useCallback(async () => {
+    const ev = store.getEstado().evento;
+    if (!ev) return;
+    const brinde = proximoBrindeExtra(ev.brindes.map((b) => b.id));
+    try {
+      await store.adicionarBrinde(brinde);
+      setMsg(`Entrou na roleta: ${brinde.nome} (× ${brinde.quantidade}).`);
     } catch (e) {
       setMsg(e instanceof Error ? e.message : String(e));
     }
@@ -121,6 +134,13 @@ export function PainelTeste({ store, estado, modo, leve, motivo3d, alternarModo,
         </button>
         <button className={`${s.botao} ${auto ? s.ligado : ""}`} onClick={() => setAuto((a) => !a)}>
           Automático: {auto ? "ligado" : "desligado"}
+        </button>
+        <button
+          className={s.botao}
+          disabled={fase === "girando" || !estado.evento || estado.evento.brindes.length >= LIMITE_BRINDES}
+          onClick={() => void adicionarBrinde()}
+        >
+          + Brinde ({estado.evento?.brindes.length ?? 0}/{LIMITE_BRINDES})
         </button>
         <button className={s.botao} disabled={fase === "girando"} onClick={() => void reiniciar()}>
           Reiniciar brindes

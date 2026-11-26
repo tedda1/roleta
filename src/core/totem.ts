@@ -13,7 +13,18 @@ import { cpfValido, somenteDigitos } from "./cpf";
 import * as db from "./db";
 import { Fatia, PlanoGiro, Rotacao, anguloAlvo, anguloAtual, montarFatias, planejarGiro } from "./geometria";
 import { ITERACOES_PADRAO, chaveCpf, hashPin, novoSal } from "./hash";
-import { ConfigBrindes, ErroRegra, Evento, Jogada, calcularEstoque, cpfJaUsado, itensSorteaveis, novoId } from "./regras";
+import {
+  Brinde,
+  ConfigBrindes,
+  ErroRegra,
+  Evento,
+  Jogada,
+  LIMITE_BRINDES,
+  calcularEstoque,
+  cpfJaUsado,
+  itensSorteaveis,
+  novoId,
+} from "./regras";
 
 export type Fase =
   | "carregando"
@@ -437,6 +448,21 @@ export class TotemStore {
     if (!ev) return;
     await db.salvarEvento(this.exigirDb(), { ...ev, som });
     this.set({ evento: { ...ev, som } });
+  }
+
+  /** Inclui um tipo de brinde novo no evento aberto (usado pela tela de teste). */
+  async adicionarBrinde(brinde: Brinde): Promise<void> {
+    const ev = this.estado.evento;
+    if (!ev) throw new Error("Abra o evento antes.");
+    if (this.estado.fase === "girando") throw new Error("Aguarde o giro terminar.");
+    if (!brinde.id || ev.brindes.some((b) => b.id === brinde.id)) throw new Error(`Já existe um brinde com id "${brinde.id}".`);
+    if (ev.brindes.length >= LIMITE_BRINDES) throw new Error(`A roleta comporta no máximo ${LIMITE_BRINDES} tipos de brinde.`);
+    if (!Number.isInteger(brinde.quantidade) || brinde.quantidade < 1) throw new Error("Quantidade inválida.");
+    const novo: Evento = { ...ev, brindes: [...ev.brindes, { ...brinde, rotulo: brinde.rotulo || brinde.nome }] };
+    await db.salvarEvento(this.exigirDb(), novo);
+    this.set({ evento: novo });
+    const f = this.estado.fase;
+    if (f === "esgotado" || f === "atracao") this.irParaAtracao();
   }
 
   async ajustarEstoque(brindeId: string, delta: number): Promise<void> {

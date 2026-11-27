@@ -54,7 +54,16 @@ import {
   TorusGeometry,
   Vector3,
   WebGLRenderer,
+  WebGLRenderTarget,
+  HalfFloatType,
+  NeutralToneMapping,
+  NoToneMapping,
+  Vector2,
 } from "three";
+import { EffectComposer } from "three/examples/jsm/postprocessing/EffectComposer.js";
+import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
+import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
+import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { PERFIS, type NivelQualidade, type PerfilQualidade } from "./qualidade";
 import { desenharFace } from "@/arte/face";
 import { LUZES, familiaCanvasTitulo } from "@/arte/paleta";
@@ -69,6 +78,11 @@ const EIXO_Y = new Vector3(0, 1, 0);
 
 /** Fases em que a roleta existe na tela; nas demais o participante só vê o CPF. */
 const FASES_COM_ROLETA: ReadonlySet<Fase> = new Set<Fase>(["pronto", "girando", "resultado"]);
+const COR_FUNDO = "#0a2248";
+// bloom do nível alto: força, raio e limiar de luminância (cena em espaço linear)
+const BLOOM_FORCA = 0.55;
+const BLOOM_RAIO = 0.45;
+const BLOOM_LIMIAR = 0.72;
 const DUR_SAIDA = 0.8; // s
 const DUR_APRESSADA = 0.45; // s que sobram da chegada quando o giro começa no meio dela
 const DUR_PULO = 0.75; // s que sobram da chegada depois de um toque na tela
@@ -353,7 +367,13 @@ const FRAG_PONTOS = /* glsl */ `
     #ifdef COR_CORRETA
     // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
     float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
-    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    if (pico > 0.0) gl_FragColor.rgb = sRGBTransferOETF(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #ifdef NO_ALVO_HDR
+    // bloom: a cena vai para um alvo linear e o OutputPass converte no fim; volta o valor "de tela" para linear
+    gl_FragColor.rgb = sRGBTransferEOTF(vec4(gl_FragColor.rgb, 1.0)).rgb;
+    #endif
+    // sem NaN/infinito: no alvo HDR do bloom eles se espalham e apagam a tela
+    gl_FragColor = (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) ? vec4(0.0) : clamp(gl_FragColor, 0.0, 16.0);
     #endif
   }
 `;
@@ -389,7 +409,13 @@ const FRAG_FITA = /* glsl */ `
     #ifdef COR_CORRETA
     // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
     float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
-    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    if (pico > 0.0) gl_FragColor.rgb = sRGBTransferOETF(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #ifdef NO_ALVO_HDR
+    // bloom: a cena vai para um alvo linear e o OutputPass converte no fim; volta o valor "de tela" para linear
+    gl_FragColor.rgb = sRGBTransferEOTF(vec4(gl_FragColor.rgb, 1.0)).rgb;
+    #endif
+    // sem NaN/infinito: no alvo HDR do bloom eles se espalham e apagam a tela
+    gl_FragColor = (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) ? vec4(0.0) : clamp(gl_FragColor, 0.0, 16.0);
     #endif
   }
 `;
@@ -428,7 +454,13 @@ const FRAG_ENXAME = /* glsl */ `
     #ifdef COR_CORRETA
     // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
     float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
-    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    if (pico > 0.0) gl_FragColor.rgb = sRGBTransferOETF(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #ifdef NO_ALVO_HDR
+    // bloom: a cena vai para um alvo linear e o OutputPass converte no fim; volta o valor "de tela" para linear
+    gl_FragColor.rgb = sRGBTransferEOTF(vec4(gl_FragColor.rgb, 1.0)).rgb;
+    #endif
+    // sem NaN/infinito: no alvo HDR do bloom eles se espalham e apagam a tela
+    gl_FragColor = (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) ? vec4(0.0) : clamp(gl_FragColor, 0.0, 16.0);
     #endif
   }
 `;
@@ -465,6 +497,10 @@ const FRAG_FACE = /* glsl */ `
     float a = clamp(dentro + borda, 0.0, 1.0) * tex.a * uOpacidade;
     gl_FragColor = vec4(cor, a);
     #include <colorspace_fragment>
+    #ifdef COR_CORRETA
+    // sem NaN/infinito: no alvo HDR do bloom eles se espalham e apagam a tela
+    gl_FragColor = (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) ? vec4(0.0) : clamp(gl_FragColor, 0.0, 16.0);
+    #endif
   }
 `;
 
@@ -500,7 +536,13 @@ const FRAG_ESTRELA = /* glsl */ `
     #ifdef COR_CORRETA
     // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
     float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
-    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    if (pico > 0.0) gl_FragColor.rgb = sRGBTransferOETF(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #ifdef NO_ALVO_HDR
+    // bloom: a cena vai para um alvo linear e o OutputPass converte no fim; volta o valor "de tela" para linear
+    gl_FragColor.rgb = sRGBTransferEOTF(vec4(gl_FragColor.rgb, 1.0)).rgb;
+    #endif
+    // sem NaN/infinito: no alvo HDR do bloom eles se espalham e apagam a tela
+    gl_FragColor = (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) ? vec4(0.0) : clamp(gl_FragColor, 0.0, 16.0);
     #endif
   }
 `;
@@ -536,7 +578,13 @@ const FRAG_RASTRO = /* glsl */ `
     #ifdef COR_CORRETA
     // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
     float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
-    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    if (pico > 0.0) gl_FragColor.rgb = sRGBTransferOETF(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #ifdef NO_ALVO_HDR
+    // bloom: a cena vai para um alvo linear e o OutputPass converte no fim; volta o valor "de tela" para linear
+    gl_FragColor.rgb = sRGBTransferEOTF(vec4(gl_FragColor.rgb, 1.0)).rgb;
+    #endif
+    // sem NaN/infinito: no alvo HDR do bloom eles se espalham e apagam a tela
+    gl_FragColor = (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) ? vec4(0.0) : clamp(gl_FragColor, 0.0, 16.0);
     #endif
   }
 `;
@@ -574,7 +622,13 @@ const FRAG_WARP = /* glsl */ `
     #ifdef COR_CORRETA
     // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
     float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
-    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    if (pico > 0.0) gl_FragColor.rgb = sRGBTransferOETF(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #ifdef NO_ALVO_HDR
+    // bloom: a cena vai para um alvo linear e o OutputPass converte no fim; volta o valor "de tela" para linear
+    gl_FragColor.rgb = sRGBTransferEOTF(vec4(gl_FragColor.rgb, 1.0)).rgb;
+    #endif
+    // sem NaN/infinito: no alvo HDR do bloom eles se espalham e apagam a tela
+    gl_FragColor = (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) ? vec4(0.0) : clamp(gl_FragColor, 0.0, 16.0);
     #endif
   }
 `;
@@ -623,7 +677,13 @@ const FRAG_LIGACOES = /* glsl */ `
     #ifdef COR_CORRETA
     // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
     float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
-    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    if (pico > 0.0) gl_FragColor.rgb = sRGBTransferOETF(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #ifdef NO_ALVO_HDR
+    // bloom: a cena vai para um alvo linear e o OutputPass converte no fim; volta o valor "de tela" para linear
+    gl_FragColor.rgb = sRGBTransferEOTF(vec4(gl_FragColor.rgb, 1.0)).rgb;
+    #endif
+    // sem NaN/infinito: no alvo HDR do bloom eles se espalham e apagam a tela
+    gl_FragColor = (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) ? vec4(0.0) : clamp(gl_FragColor, 0.0, 16.0);
     #endif
   }
 `;
@@ -656,7 +716,13 @@ const FRAG_NOS = /* glsl */ `
     #ifdef COR_CORRETA
     // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
     float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
-    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    if (pico > 0.0) gl_FragColor.rgb = sRGBTransferOETF(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #ifdef NO_ALVO_HDR
+    // bloom: a cena vai para um alvo linear e o OutputPass converte no fim; volta o valor "de tela" para linear
+    gl_FragColor.rgb = sRGBTransferEOTF(vec4(gl_FragColor.rgb, 1.0)).rgb;
+    #endif
+    // sem NaN/infinito: no alvo HDR do bloom eles se espalham e apagam a tela
+    gl_FragColor = (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) ? vec4(0.0) : clamp(gl_FragColor, 0.0, 16.0);
     #endif
   }
 `;
@@ -712,7 +778,13 @@ const FRAG_ANEL = /* glsl */ `
     #ifdef COR_CORRETA
     // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
     float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
-    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    if (pico > 0.0) gl_FragColor.rgb = sRGBTransferOETF(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #ifdef NO_ALVO_HDR
+    // bloom: a cena vai para um alvo linear e o OutputPass converte no fim; volta o valor "de tela" para linear
+    gl_FragColor.rgb = sRGBTransferEOTF(vec4(gl_FragColor.rgb, 1.0)).rgb;
+    #endif
+    // sem NaN/infinito: no alvo HDR do bloom eles se espalham e apagam a tela
+    gl_FragColor = (any(isnan(gl_FragColor)) || any(isinf(gl_FragColor))) ? vec4(0.0) : clamp(gl_FragColor, 0.0, 16.0);
     #endif
   }
 `;
@@ -881,6 +953,8 @@ export class Cena {
   private leve: boolean;
   private nivel: NivelQualidade;
   private perfil: PerfilQualidade;
+  private composer: EffectComposer | null = null;
+  private bloom: UnrealBloomPass | null = null;
   private quadro = 0;
   private ultimoT = 0;
   private acumulado = 0;
@@ -919,7 +993,7 @@ export class Cena {
     this.ampAtual = this.leve ? 0 : 1;
     this.durChegada = this.leve ? DUR_CHEGADA_LEVE : DUR_CHEGADA;
     this.renderer = new WebGLRenderer({ antialias: this.perfil.antialias, alpha: false, stencil: false, powerPreference: "high-performance" });
-    this.renderer.setClearColor(new Color("#0a2248"));
+    this.renderer.setClearColor(new Color(COR_FUNDO));
     this.dprAtual = Math.min(window.devicePixelRatio || 1, this.perfil.dprMax);
     // teto de pixels: em telas 4K o DPR alto custaria caro demais (nunca abaixo de 1)
     const pixelsTela = Math.max(1, window.innerWidth * window.innerHeight);
@@ -959,6 +1033,8 @@ export class Cena {
     this.cena.add(this.inclinacao);
     this.inclinacao.add(this.disco);
 
+    // o canvas já nasce no tamanho final: a textura não pode subir para a GPU num tamanho e mudar depois
+    this.canvasFace.width = this.canvasFace.height = this.perfil.ladoFace;
     this.texturaFace = new CanvasTexture(this.canvasFace);
     this.texturaFace.colorSpace = SRGBColorSpace;
     this.texturaFace.anisotropy = Math.min(this.perfil.anisotropia, this.renderer.capabilities.getMaxAnisotropy());
@@ -1061,6 +1137,7 @@ export class Cena {
     this.anel = this.criarAnel();
     this.inclinacao.add(this.anel);
 
+    if (this.perfil.bloom) this.ligarBloom();
     this.redimensionar();
     window.addEventListener("resize", this.redimensionar);
     window.addEventListener("pointermove", this.moverPonteiro, { passive: true });
@@ -1075,6 +1152,13 @@ export class Cena {
     // níveis normal/alta: todos os shaders próprios convertem a cor para a saída (sRGB), como a face
     if (!this.leve) this.ligarCorCorreta();
     this.renderer.compile(this.cena, this.camera);
+    if (this.composer) {
+      try {
+        this.composer.render();
+      } catch {
+        this.desligarBloom();
+      }
+    }
     this.enxame.visible = false;
     this.aplicarOculta();
     this.avisarNivel();
@@ -1585,6 +1669,7 @@ export class Cena {
     });
     this.descartaveis.forEach((d) => d.dispose());
     this.texturaFace.dispose();
+    this.desligarBloom(false);
     this.renderer.dispose();
     // dispose() não libera o contexto: sem isto cada troca 2D/3D deixa um contexto vivo até o GC
     try {
@@ -1597,7 +1682,10 @@ export class Cena {
 
   // ---------- internos ----------
   private redesenharFace = () => {
+    const ladoAntes = this.canvasFace.width;
     desenharFace(this.canvasFace, this.fatias, this.perfil.ladoFace);
+    // se o tamanho mudou, a textura já alocada na GPU precisa ser recriada (senão fica vazia)
+    if (this.canvasFace.width !== ladoAntes) this.texturaFace.dispose();
     this.texturaFace.needsUpdate = true;
     // envia a textura à GPU agora (com a roleta oculta), e não no meio da animação de chegada
     try {
@@ -1624,6 +1712,8 @@ export class Cena {
     const w = this.host.clientWidth || window.innerWidth;
     const h = this.host.clientHeight || window.innerHeight;
     this.renderer.setSize(w, h, false);
+    this.composer?.setPixelRatio(this.dprAtual);
+    this.composer?.setSize(w, h);
     this.camera.aspect = w / h;
     this.uniformesComuns.uEscala.value = h * this.dprAtual * 0.9;
   };
@@ -2338,9 +2428,15 @@ export class Cena {
 
   /** Liga a conversão de cor de saída (COR_CORRETA) em todos os ShaderMaterial da cena. */
   private ligarCorCorreta() {
+    const hdr = !!this.composer;
     const ligar = (m: unknown) => {
       const s = m as ShaderMaterial;
-      if (s && s.isShaderMaterial) s.defines = { ...s.defines, COR_CORRETA: "" };
+      if (!s || !s.isShaderMaterial) return;
+      const defs: Record<string, unknown> = { ...s.defines, COR_CORRETA: "" };
+      if (hdr) defs.NO_ALVO_HDR = "";
+      else delete defs.NO_ALVO_HDR;
+      s.defines = defs;
+      s.needsUpdate = true;
     };
     this.cena.traverse((o) => {
       const m = (o as Mesh).material;
@@ -2350,9 +2446,53 @@ export class Cena {
     this.descartaveis.forEach(ligar);
   }
 
+  /**
+   * Nível alto: pós-processamento com bloom real. A cena é desenhada num alvo HDR (meia-precisão,
+   * MSAA 4x), o UnrealBloomPass faz o brilho só do que passa do limiar e o OutputPass aplica
+   * tone mapping (Neutral: preserva as cores da paleta) e a conversão para sRGB.
+   */
+  private ligarBloom() {
+    try {
+      const alvo = new WebGLRenderTarget(1, 1, { type: HalfFloatType, samples: 4 });
+      const composer = new EffectComposer(this.renderer, alvo);
+      composer.setPixelRatio(this.dprAtual);
+      composer.addPass(new RenderPass(this.cena, this.camera));
+      const bloom = new UnrealBloomPass(new Vector2(256, 256), BLOOM_FORCA, BLOOM_RAIO, BLOOM_LIMIAR);
+      composer.addPass(bloom);
+      composer.addPass(new OutputPass());
+      this.renderer.toneMapping = NeutralToneMapping;
+      // ao limpar o alvo HDR o three converte a cor de fundo para sRGB, e o OutputPass converte de novo
+      // no fim: pré-compensa para o fundo sair exatamente no azul da paleta
+      this.renderer.setClearColor(new Color(COR_FUNDO).convertSRGBToLinear());
+      this.renderer.toneMappingExposure = 1;
+      this.composer = composer;
+      this.bloom = bloom;
+    } catch (e) {
+      console.warn("Bloom indisponível; seguindo sem pós-processamento.", e);
+      this.composer = null;
+      this.bloom = null;
+    }
+  }
+
+  /** Volta ao desenho direto (sem bloom). Usado pelo avaliador de desempenho e no descarte. */
+  private desligarBloom(avisar = true) {
+    if (!this.composer) return;
+    this.bloom?.dispose();
+    this.composer.renderTarget1.dispose();
+    this.composer.renderTarget2.dispose();
+    this.composer.dispose();
+    this.composer = null;
+    this.bloom = null;
+    this.renderer.toneMapping = NoToneMapping;
+    this.renderer.setClearColor(new Color(COR_FUNDO));
+    // shaders voltam a escrever direto na tela (recompila uma vez)
+    if (avisar && !this.destruido) this.ligarCorCorreta();
+    if (avisar) this.avisarNivel();
+  }
+
   /** Informa a interface do nível efetivo (o avaliador pode ter baixado a resolução). */
   private avisarNivel() {
-    const detalhe = `${this.nivel} · DPR ${this.dprAtual.toFixed(2)}`;
+    const detalhe = `${this.nivel}${this.composer ? " + bloom" : ""} · DPR ${this.dprAtual.toFixed(2)}`;
     queueMicrotask(() => window.dispatchEvent(new CustomEvent("roleta:nivel", { detail: detalhe })));
   }
 
@@ -2378,7 +2518,13 @@ export class Cena {
       if (this.ema > 45) {
         if (!this.lentoDesde) this.lentoDesde = agora;
         else if (agora - this.lentoDesde > 3000 && this.fase !== "girando") {
-          // primeiro tenta baixar a resolução; só cai para o 2D se já estiver no mínimo
+          // primeiro desliga o bloom, depois baixa a resolução; só cai para o 2D no mínimo
+          if (this.composer) {
+            this.desligarBloom();
+            this.ema = 0;
+            this.lentoDesde = 0;
+            return;
+          }
           if (this.dprAtual > 0.75) {
             this.dprAtual = this.dprAtual > 1 ? 1 : 0.75;
             this.avisarNivel();
@@ -2425,7 +2571,9 @@ export class Cena {
     const limiteReduz = Math.max(21, periodo * 1.4);
     this.nAmostras = 0;
     this.janelaInicio = 0;
-    if (mediana > limiteFalha) {
+    if (this.composer && mediana > limiteReduz) {
+      this.desligarBloom();
+    } else if (mediana > limiteFalha) {
       this.falhar(`desempenho insuficiente (${mediana.toFixed(0)} ms por quadro)`);
     } else if (mediana > limiteReduz && this.dprAtual > 0.75) {
       this.dprAtual = this.dprAtual > 1 ? 1 : 0.75;
@@ -2496,7 +2644,8 @@ export class Cena {
     this.atualizarCamera(dt, t);
     this.aplicarRevelacao(dt);
     this.atualizarFaiscas(dt);
-    this.renderer.render(this.cena, this.camera);
+    if (this.composer) this.composer.render();
+    else this.renderer.render(this.cena, this.camera);
     this.avaliarDesempenho(dtMs, agora);
   }
 }

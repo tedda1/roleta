@@ -21,12 +21,14 @@ export interface PerfilQualidade {
   /** lado dos matcaps do metal (px) */
   ladoMatcap: number;
   anisotropia: number;
+  /** pós-processamento com bloom real (UnrealBloomPass) + MSAA 4x + tone mapping */
+  bloom: boolean;
 }
 
 export const PERFIS: Record<NivelQualidade, PerfilQualidade> = {
-  leve: { dprMax: 1, pixelsMax: 1920 * 1080, antialias: false, ladoFace: 768, ladoSprite: 128, ladoMatcap: 128, anisotropia: 4 },
-  normal: { dprMax: 1.5, pixelsMax: 2560 * 1440, antialias: true, ladoFace: 2048, ladoSprite: 512, ladoMatcap: 512, anisotropia: 8 },
-  alta: { dprMax: 2, pixelsMax: 3840 * 2160, antialias: true, ladoFace: 2048, ladoSprite: 1024, ladoMatcap: 512, anisotropia: 16 },
+  leve: { dprMax: 1, pixelsMax: 1920 * 1080, antialias: false, ladoFace: 768, ladoSprite: 128, ladoMatcap: 128, anisotropia: 4, bloom: false },
+  normal: { dprMax: 1.5, pixelsMax: 2560 * 1440, antialias: true, ladoFace: 2048, ladoSprite: 512, ladoMatcap: 512, anisotropia: 8, bloom: false },
+  alta: { dprMax: 2, pixelsMax: 3840 * 2160, antialias: true, ladoFace: 2048, ladoSprite: 1024, ladoMatcap: 512, anisotropia: 16, bloom: true },
 };
 
 /** GPUs dedicadas conhecidas começam em "alta"; o resto em "normal" (o avaliador rebaixa se precisar). */

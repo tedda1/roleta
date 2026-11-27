@@ -34,10 +34,10 @@ O 3D tem três níveis (`src/palco3d/qualidade.ts`), escolhidos em **Administrad
 | Automática (padrão) | — | GPU dedicada conhecida começa em **alta**; o resto em **normal** |
 | Leve | PC fraco | Igual ao modo leve de antes (texturas 128–256 px, face 768 px, DPR 1, sem antialias, chegada ~5 s) |
 | Normal | GPU integrada | Face 2048 px, brilhos 512 px, metal com matcap de estúdio 512 px, mais polígonos no aro/pinos, cor de saída correta em todos os shaders, MSAA, DPR até 1,5 |
-| Alta | GPU dedicada | Tudo do normal + brilhos 1024 px, anisotropia 16, DPR até 2 (com teto de 4K em pixels) |
+| Alta | GPU dedicada | Tudo do normal + **bloom real** (UnrealBloomPass) com tone mapping Neutral e MSAA 4x num alvo HDR, brilhos 1024 px, anisotropia 16, DPR até 2 (com teto de 4K em pixels) |
 
-O avaliador de desempenho continua só rebaixando: diminui a resolução e, se ainda estiver lento,
-cai para o 2D (nunca durante o giro ou a viagem da estrela).
+O avaliador de desempenho continua só rebaixando: primeiro desliga o bloom, depois diminui a
+resolução e, se ainda estiver lento, cai para o 2D (nunca durante o giro ou a viagem da estrela).
 
 ## Regras do sorteio
 

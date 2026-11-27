@@ -13,6 +13,7 @@ export interface CentroRoleta {
 }
 
 const LIMIAR_LANCE = 2.5; // rad/s
+const ARRASTO_MINIMO = 0.6; // rad (~1/10 de volta) arrastados contam como giro ao soltar
 const JANELA_MS = 110;
 
 export function ligarGesto(el: HTMLElement, store: TotemStore, obterCentro: () => CentroRoleta | null): () => void {
@@ -73,7 +74,10 @@ export function ligarGesto(el: HTMLElement, store: TotemStore, obterCentro: () =
     const dt = (ultimo.t - primeiro.t) / 1000;
     const recente = e.timeStamp - ultimo.t < 80;
     const w = dt > 0.01 && recente ? (ultimo.theta - primeiro.theta) / dt : 0;
-    if (lancar && Math.abs(w) >= LIMIAR_LANCE) {
+    if (lancar && Math.abs(acumulado) >= ARRASTO_MINIMO && Math.abs(w) < LIMIAR_LANCE) {
+      // sem botão "Girar": arrastar um bom pedaço e soltar devagar também gira (no sentido do arrasto)
+      void store.girar(7, Math.sign(acumulado));
+    } else if (lancar && Math.abs(w) >= LIMIAR_LANCE) {
       void store.girar(Math.min(16, Math.max(5, Math.abs(w))), Math.sign(w));
     } else {
       store.soltarSemGiro();

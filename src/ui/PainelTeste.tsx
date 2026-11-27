@@ -7,22 +7,31 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CONFIG_DEMO, gerarCpfTeste, proximoBrindeExtra } from "@/core/demo";
 import { LIMITE_BRINDES } from "@/core/regras";
 import type { EstadoTotem, TotemStore } from "@/core/totem";
-import type { ModoPalco } from "./preferencias";
+import { NOMES_ENTRADA, NOMES_SOM, type Entrada, type ModoPalco, type SomFormacao } from "./preferencias";
+import { ouvirSom } from "./ouvirSom";
+import { NOMES_QUALIDADE, type Qualidade } from "@/palco3d/qualidade";
 import s from "./PainelTeste.module.css";
 
 interface Props {
   store: TotemStore;
   estado: EstadoTotem;
   modo: ModoPalco;
-  leve: boolean;
+  qualidade: Qualidade;
+  /** nível efetivo na cena 3D (pode ter sido rebaixado pelo avaliador) */
+  nivelAtivo: string | null;
   motivo3d: string | null;
   /** true enquanto a estrela viaja (3D): não dá para girar ainda */
   aguardandoRoleta: boolean;
   alternarModo: () => void;
-  alternarLeve: () => void;
+  alternarQualidade: () => void;
+  entrada: Entrada;
+  alternarEntrada: () => void;
+  somFormacao: SomFormacao;
+  /** troca o som de formação e já toca o novo */
+  alternarSom: () => void;
 }
 
-export function PainelTeste({ store, estado, modo, leve, motivo3d, aguardandoRoleta, alternarModo, alternarLeve }: Props) {
+export function PainelTeste({ store, estado, modo, qualidade, nivelAtivo, motivo3d, aguardandoRoleta, alternarModo, alternarQualidade, entrada, alternarEntrada, somFormacao, alternarSom }: Props) {
   const [aberto, setAberto] = useState(true);
   const [auto, setAuto] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -121,7 +130,7 @@ export function PainelTeste({ store, estado, modo, leve, motivo3d, aguardandoRol
         <span ref={fpsRef} className={s.fps} />
         <span className={s.info}>
           {modo.toUpperCase()}
-          {leve ? " leve" : ""} · fase <strong>{fase}</strong> · {estado.fatias.length} na roleta · {restantes} unid. · {jogadas} jogadas
+          {modo === "3d" && nivelAtivo ? ` · ${nivelAtivo}` : ""} · fase <strong>{fase}</strong> · {estado.fatias.length} na roleta · {restantes} unid. · {jogadas} jogadas
         </span>
         <button className={s.mini} onClick={() => setAberto(false)} aria-label="Recolher controles">
           ▾
@@ -150,8 +159,17 @@ export function PainelTeste({ store, estado, modo, leve, motivo3d, aguardandoRol
         <button className={s.botao} onClick={alternarModo}>
           Ver em {modo === "3d" ? "2D" : "3D"}
         </button>
-        <button className={s.botao} onClick={alternarLeve}>
-          Modo leve: {leve ? "ligado" : "desligado"}
+        <button className={s.botao} onClick={alternarEntrada}>
+          Entrada: {NOMES_ENTRADA[entrada]}
+        </button>
+        <button className={s.botao} onClick={alternarSom}>
+          Som: {NOMES_SOM[somFormacao]}
+        </button>
+        <button className={s.botao} onClick={() => ouvirSom(somFormacao)}>
+          ▶ Ouvir som
+        </button>
+        <button className={s.botao} onClick={alternarQualidade}>
+          Qualidade: {NOMES_QUALIDADE[qualidade]}
         </button>
       </div>
       {(motivo3d || msg) && <p className={s.msg}>{motivo3d ? `3D desativado: ${motivo3d}` : msg}</p>}

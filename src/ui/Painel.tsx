@@ -168,10 +168,14 @@ export function Painel({ store, estado, abrirAdmin, aguardandoRoleta = false, at
         <p className={`${s.aviso} ${estado.aviso ? s.avisoAtivo : ""}`} role="status">
           {estado.aviso ?? " "}
         </p>
-        <button className={`${s.botao} ${s.girar}`} onClick={() => void store.girar()}>
-          Girar a roleta
-        </button>
-        <p className={s.dica}>ou agarre a roleta e gire com o dedo</p>
+        {/* sem botão: o participante gira a roleta arrastando com o dedo */}
+        <div className={s.arraste} aria-live="polite">
+          <span className={s.maozinha} aria-hidden>
+            ☝
+          </span>
+          <span className={s.arrasteTexto}>Arraste a roleta para girar!</span>
+        </div>
+        <p className={s.dica}>Encoste o dedo na roleta, arraste e solte</p>
         <div className={s.rodape}>
           {!estado.avulsa && (
             <button className={s.botaoTexto} onClick={() => store.apagar()}>

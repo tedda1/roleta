@@ -167,30 +167,33 @@
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 17%;
-  height: 17%;
-  margin: -8.5% 0 0 -8.5%;
+  width: 21%;
+  height: 21%;
+  margin: -10.5% 0 0 -10.5%;
   border-radius: 50%;
-  background: radial-gradient(circle at 40% 35%, #2d4b8f, #0a2248 60%, #050d24);
-  box-shadow: 0 0 0 2px rgba(201, 214, 255, 0.85), 0 0 0 5px rgba(10, 34, 72, 0.9), 0 0 24px rgba(120, 170, 255, 0.55);
+  /* medalhão claro (perolado) para as cores da logo aparecerem sobre o azul profundo */
+  background: radial-gradient(circle at 38% 30%, #ffffff 0%, #f4f6fb 45%, #dfe5f1 80%, #c9d2e6 100%);
+  box-shadow: 0 0 0 2px #e9c46a, 0 0 0 4px rgba(10, 34, 72, 0.9), 0 0 0 5px rgba(201, 214, 255, 0.6), 0 0 26px rgba(255, 220, 150, 0.45);
   transform: translateZ(6px);
   display: grid;
   place-items: center;
 }
 
-.estrela {
-  width: 62%;
-  height: 62%;
-  background: radial-gradient(circle, #ffffff 0%, #fff4d6 30%, #ffd23f 60%, rgba(255, 210, 63, 0) 72%);
-  clip-path: polygon(50% 0%, 60% 40%, 100% 50%, 60% 60%, 50% 100%, 40% 60%, 0% 50%, 40% 40%);
+.logo {
+  width: 82%;
+  height: auto;
+  pointer-events: none;
+  user-select: none;
 }
 
-.vitoria .estrela {
-  animation: girarEstrela 3s linear infinite;
+/* no resultado, o medalhão pulsa de leve */
+.vitoria .cubo {
+  animation: pulsarLogo 1.6s ease-in-out infinite;
 }
 
-@keyframes girarEstrela {
-  to { transform: rotate(360deg); }
+@keyframes pulsarLogo {
+  0%, 100% { scale: 1; }
+  50% { scale: 1.06; }
 }
 
 .ponteiro {
@@ -226,7 +229,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .vitoria .pulso,
-  .vitoria .estrela,
+  .vitoria .cubo,
   .chegou,
   .chegou .aro,
   .chegou .cubo,

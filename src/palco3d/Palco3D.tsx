@@ -4,17 +4,20 @@ import type { Fatia } from "@/core/geometria";
 import type { Fase, TotemStore } from "@/core/totem";
 import { Cena } from "./cena";
 import { avaliarWebGL } from "./deteccao";
+import { Qualidade, resolverNivel } from "./qualidade";
+import type { Entrada } from "@/ui/preferencias";
 
 interface Props {
   store: TotemStore;
   fatias: Fatia[];
   fase: Fase;
-  leve: boolean;
+  qualidade: Qualidade;
+  entrada: Entrada;
   celulaRef: RefObject<HTMLDivElement | null>;
   aoFalhar: (motivo: string) => void;
 }
 
-export default function Palco3D({ store, fatias, fase, leve, celulaRef, aoFalhar }: Props) {
+export default function Palco3D({ store, fatias, fase, qualidade, entrada, celulaRef, aoFalhar }: Props) {
   const hostRef = useRef<HTMLDivElement>(null);
   const cenaRef = useRef<Cena | null>(null);
   const fatiasRef = useRef(fatias);
@@ -31,7 +34,8 @@ export default function Palco3D({ store, fatias, fase, leve, celulaRef, aoFalhar
     let cena: Cena;
     try {
       cena = new Cena(host, store, {
-        leve,
+        nivel: resolverNivel(qualidade, av.renderizador),
+        entrada,
         obterCelula: () => celulaRef.current?.getBoundingClientRect() ?? null,
         aoFalhar,
       });
@@ -48,7 +52,7 @@ export default function Palco3D({ store, fatias, fase, leve, celulaRef, aoFalhar
       cena.destruir();
       cenaRef.current = null;
     };
-  }, [store, leve, celulaRef, aoFalhar]);
+  }, [store, qualidade, entrada, celulaRef, aoFalhar]);
 
   useEffect(() => {
     fatiasRef.current = fatias;

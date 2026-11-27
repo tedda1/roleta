@@ -6,15 +6,32 @@ feita para rodar numa **tela touch** (totem) em um PC desconhecido, **sem intern
 **Fluxo do participante:** a tela inicial mostra só o campo de CPF (com teclado numérico na tela).
 Quando o CPF é confirmado:
 
-- **3D (~8 s, ~5 s no modo leve):** o cartão do CPF se contrai num ponto de luz que vira uma
-  **estrela**. A estrela viaja pelo espaço com a câmera acompanhando (rastro dourado, estrelas virando
-  riscos de velocidade, constelações acendendo e se ligando a ela: "cada conexão, uma parceria"),
-  chega ao lugar da roleta, explode numa supernova e **vira a roleta**: a face surge de dentro para
-  fora com borda dourada, o aro acende, os pinos nascem como estrelinhas e o ponteiro cai.
-  **Toque na tela para pular.** O botão "Girar" só aparece quando a roleta termina de se formar.
+- **3D**, com várias entradas (Administrador > **Entrada 3D**, ou `?entrada=cadentes|helice|serpente|raios|estrela`):
+  - **Estrelas cadentes (padrão, ~4,5 s; ~3,2 s no leve):** a câmera **viaja pelo espaço** junto com uma
+    revoada de **9 estrelas cadentes, uma para cada cor da logo** (riscos de velocidade, constelações passando,
+    acendendo e se ligando às cadentes). No fim a câmera se afasta, as cadentes fecham uma espiral e,
+    ao se juntarem, **formam a roleta** (flash, onda de choque, face revelada de dentro para fora,
+    aro acendendo nas cores da logo, pinos, ponteiro caindo).
+  - **Coreografias das cadentes** (mesma viagem, outro desenho): **Hélice** (saca-rolhas em volta da
+    rota), **Serpente** (fila ondulando à frente, que se enrola em sequência) e **Raios de estrela**
+    (anel emoldurando a vista; no fim as 9 chegam retas de 9 direções e desenham uma estrela).
+  - **Estrela viajante (~5 s; ~3,5 s no leve):** o cartão do CPF vira uma estrela que viaja pelo
+    espaço, explode numa supernova e vira a roleta.
+  - No instante em que a roleta se forma toca um **som** sintetizado, à escolha (Administrador >
+    **Som da roleta**, ou `?som=`): *Acorde brilhante*, *Sinos*, *Cristal mágico*, *Impacto cósmico*
+    e *Fanfarra*. Trocar o som já toca o novo; o botão **▶ Ouvir som** repete.
+  - **Fundo do espaço:** nebulosas nas cores da paleta/logo e a Via Láctea (com faixas de poeira),
+    geradas uma vez na GPU ao abrir (`src/palco3d/ceu.ts`), mais estrelinhas concentradas na faixa.
+    As constelações têm linhas finas e suaves (com um brilho que corre por elas) e estrelas com
+    raios em cruz; as fitas coloridas são faixas de seda com núcleo, fios e pulsos de luz; e de vez
+    em quando uma **estrela cadente** cruza o fundo (`src/palco3d/enfeites.ts`).
+  - **Toque na tela para pular.**
 - **2D:** o cartão "descola" da tela e a roleta "levanta" em perspectiva via CSS (~1,3 s).
 
-Depois do resultado, volta para a tela de CPF.
+**Girar:** não há botão — o participante **arrasta a roleta com o dedo** e solta (um lance rápido ou
+um arrasto de ~1/10 de volta). Ao parar, a **fatia vencedora acende**, o ponteiro pulsa e uma
+explosão de estrelas cadentes nas cores da logo sai do ponteiro. O **centro da roleta é a logo da empresa** num medalhão claro (`public/marca/logo-oncologygroup.webp`),
+no 2D e no 3D. Depois do resultado, volta para a tela de CPF.
 
 - **Versão 2D com detalhes 3D** (`/`): roleta em canvas com perspectiva, espessura, aro metálico, brilho e céu da identidade visual. Leve: só anima `transform`.
 - **Versão 3D interativa** (`/3d/`): three.js; a roleta "descola" da tela e ganha volume, câmera viva com parallax, agarrar-e-lançar com o dedo, faíscas ao tocar o céu e revelação com estrelas que formam uma estrela. Se o PC não aguentar, cai sozinha para o 2D sem perder nada.
@@ -23,6 +40,21 @@ Depois do resultado, volta para a tela de CPF.
   evento real). Abre sozinha com 8 brindes e traz uma barra de controles: *CPF de teste*, *Girar*,
   *Automático* (joga sem parar, ótimo para ver a roleta encolher e medir desempenho), *Reiniciar brindes*,
   troca 2D/3D, modo leve e um medidor de quadros por segundo. PIN do administrador da demonstração: `1234`.
+
+## Qualidade do 3D
+
+O 3D tem três níveis (`src/palco3d/qualidade.ts`), escolhidos em **Administrador > Qualidade 3D**
+(ou `?qualidade=leve|normal|alta` na URL):
+
+| Nível | Para quê | O que muda |
+|---|---|---|
+| Automática (padrão) | — | GPU dedicada conhecida começa em **alta**; o resto em **normal** |
+| Leve | PC fraco | Igual ao modo leve de antes (texturas 128–256 px, face 768 px, DPR 1, sem antialias, chegada ~5 s) |
+| Normal | GPU integrada | Face 2048 px, brilhos 512 px, metal com matcap de estúdio 512 px, mais polígonos no aro/pinos, cor de saída correta em todos os shaders, MSAA, DPR até 1,5 |
+| Alta | GPU dedicada | Tudo do normal + **bloom real** (UnrealBloomPass) com tone mapping Neutral e MSAA 4x num alvo HDR, brilhos 1024 px, anisotropia 16, DPR até 2 (com teto de 4K em pixels) |
+
+O avaliador de desempenho continua só rebaixando: primeiro desliga o bloom, depois diminui a
+resolução e, se ainda estiver lento, cai para o 2D (nunca durante o giro ou a viagem da estrela).
 
 ## Regras do sorteio
 

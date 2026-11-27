@@ -7,7 +7,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CONFIG_DEMO, gerarCpfTeste, proximoBrindeExtra } from "@/core/demo";
 import { LIMITE_BRINDES } from "@/core/regras";
 import type { EstadoTotem, TotemStore } from "@/core/totem";
-import type { Entrada, ModoPalco } from "./preferencias";
+import { NOMES_ENTRADA, NOMES_SOM, type Entrada, type ModoPalco, type SomFormacao } from "./preferencias";
+import { ouvirSom } from "./ouvirSom";
 import { NOMES_QUALIDADE, type Qualidade } from "@/palco3d/qualidade";
 import s from "./PainelTeste.module.css";
 
@@ -25,9 +26,12 @@ interface Props {
   alternarQualidade: () => void;
   entrada: Entrada;
   alternarEntrada: () => void;
+  somFormacao: SomFormacao;
+  /** troca o som de formação e já toca o novo */
+  alternarSom: () => void;
 }
 
-export function PainelTeste({ store, estado, modo, qualidade, nivelAtivo, motivo3d, aguardandoRoleta, alternarModo, alternarQualidade, entrada, alternarEntrada }: Props) {
+export function PainelTeste({ store, estado, modo, qualidade, nivelAtivo, motivo3d, aguardandoRoleta, alternarModo, alternarQualidade, entrada, alternarEntrada, somFormacao, alternarSom }: Props) {
   const [aberto, setAberto] = useState(true);
   const [auto, setAuto] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -156,7 +160,13 @@ export function PainelTeste({ store, estado, modo, qualidade, nivelAtivo, motivo
           Ver em {modo === "3d" ? "2D" : "3D"}
         </button>
         <button className={s.botao} onClick={alternarEntrada}>
-          Entrada: {entrada === "cadentes" ? "Cadentes" : "Estrela"}
+          Entrada: {NOMES_ENTRADA[entrada]}
+        </button>
+        <button className={s.botao} onClick={alternarSom}>
+          Som: {NOMES_SOM[somFormacao]}
+        </button>
+        <button className={s.botao} onClick={() => ouvirSom(somFormacao)}>
+          ▶ Ouvir som
         </button>
         <button className={s.botao} onClick={alternarQualidade}>
           Qualidade: {NOMES_QUALIDADE[qualidade]}

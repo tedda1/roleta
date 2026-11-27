@@ -6,8 +6,10 @@
  * Orçamento: ~16 draw calls, < 20k triângulos, sem luzes (Basic/Matcap/shaders simples),
  * DPR ≤ 1,5, brilho por sprites aditivos. O resultado NUNCA é decidido aqui.
  *
- * Duas entradas (OpcoesCena.entrada) com o mesmo roteiro base de 8 s ("tau"), comprimido pela
- * duração real: "cadentes" ~6 s (~4 s no leve), "estrela" ~5 s (~3,5 s no leve). As duas usam a
+ * Entradas (OpcoesCena.entrada) com o mesmo roteiro base de 8 s ("tau"), comprimido pela
+ * duração real: as cadentes ~4,5 s (~3,2 s no leve; coreografias revoada, hélice, serpente e
+ * raios: ver formacaoCadente/prepararCadentes), "estrela" ~5 s (~3,5 s no leve).
+ * Fundo: céu com nebulosas e Via Láctea gerado uma vez na GPU (ceu.ts). As duas usam a
  * mesma viagem (curva CatmullRom, câmera de perseguição, riscos de warp, constelações) e a mesma
  * formação da roleta (tau 6,6 → 8).
  *
@@ -100,6 +102,7 @@ import { OutputPass } from "three/examples/jsm/postprocessing/OutputPass.js";
 import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { PERFIS, type NivelQualidade, type PerfilQualidade } from "./qualidade";
+import { NORMAL_BANDA, criarCeu, type Ceu } from "./ceu";
 import { desenharFace } from "@/arte/face";
 import { LUZES, familiaCanvasTitulo } from "@/arte/paleta";
 import { Fatia, TAU, anguloAtual, fatiaSobPonteiro, modPositivo } from "@/core/geometria";
@@ -183,6 +186,7 @@ const P_T_ESP = 13; // entrada: instante em que entra na espiral | explosão: du
 const P_R_E = 14; // entrada: raio da espiral na entrada
 const P_FI_E = 15; // entrada: ângulo (horário desde as 12h, no disco) na entrada
 const P_H0 = 16; // entrada: altura acima do disco na entrada
+const P_TORCE = 17; // entrada: quanto a espiral final gira (1 = espiral; 0 = chega reto, em raio)
 /** Espiral: ângulo percorrido = ESP_A·k + ESP_B·k² (k = 0..1), ~1,75 volta acelerando. */
 const ESP_A = 5;
 const ESP_B = 6;
@@ -258,7 +262,14 @@ function sDoRoteiro(tau: number): number {
   return saturar(1 - (VMAX * r * r) / (2 * FREIO));
 }
 
-export type EntradaCena = "cadentes" | "estrela";
+/**
+ * Entradas: quatro coreografias das 9 cadentes na mesma viagem ("cadentes" = revoada livre +
+ * espiral; "helice" = saca-rolhas em volta da rota + espiral; "serpente" = fila ondulando à
+ * frente da câmera, que se enrola em sequência; "raios" = anel largo emoldurando a vista, que
+ * no fim converge reto de 9 direções e desenha uma estrela) e a estrela viajante.
+ */
+export type EntradaCena = "cadentes" | "helice" | "serpente" | "raios" | "estrela";
+type Coreografia = "revoada" | "helice" | "serpente" | "raios";
 
 export interface OpcoesCena {
   nivel: NivelQualidade;
@@ -1112,6 +1123,8 @@ export class Cena {
   private matFita: ShaderMaterial;
   private matEnxame: ShaderMaterial;
   private descartaveis: { dispose: () => void }[] = [];
+  /** fundo: nebulosas + Via Láctea (null se a geração falhar: fica a cor de fundo) */
+  private ceu: Ceu | null = null;
 
   // peças da roleta animadas na chegada/saída
   private halo: Mesh;
@@ -1190,7 +1203,9 @@ export class Cena {
 
   // ---------- estrelas cadentes (2 draw calls: faixas dos rastros + cabeças) ----------
   /** entrada desta chegada (lida das opções a cada chegada) */
-  private entradaAtual: EntradaCena = "cadentes";
+  private entradaAtual: "cadentes" | "estrela" = "cadentes";
+  /** coreografia das cadentes nesta chegada */
+  private coreografia: Coreografia = "revoada";
   /** 0 = desligadas, 1 = entrada (tempo do roteiro), 2 = explosão do resultado (s reais) */
   private modoCadentes: 0 | 1 | 2 = 0;
   private nCad: number;
@@ -1205,6 +1220,7 @@ export class Cena {
   private cadCores: Float32Array;
   private uCad = { uMestre: this.uMestre, uEscala: this.uniformesComuns.uEscala };
   private vEsp = new Vector3();
+  private vForm = new Vector3();
   private formouEmitido = false;
 
   // ---------- celebração ao parar ----------
@@ -1342,6 +1358,14 @@ export class Cena {
     this.cena.add(this.camera);
 
     // ---------- céu ----------
+    try {
+      const ceu = criarCeu(this.renderer, this.perfil.ladoCeu);
+      this.ceu = ceu;
+      this.cena.add(ceu.malha);
+      this.descartaveis.push({ dispose: ceu.descartar });
+    } catch (e) {
+      console.warn("Céu com nebulosas indisponível; seguindo com a cor de fundo.", e);
+    }
     this.estrelas = this.criarEstrelas();
     this.cena.add(this.estrelas);
     this.cena.add(this.criarConstelacoes());
@@ -1608,7 +1632,9 @@ export class Cena {
     // casca de estrelas ao redor de toda a cena, só nas direções que a câmera final NÃO vê:
     // dá céu à viagem quando a câmera olha para trás/lados, sem mudar o fundo final
     const nCasca = this.leve ? 900 : 2200;
-    const total = n + nCasca;
+    // estrelinhas distantes concentradas na faixa da Via Láctea (o mapa do céu tem a nebulosidade)
+    const nBanda = this.leve ? 1400 : this.nivel === "alta" ? 5200 : 3800;
+    const total = n + nCasca + nBanda;
     const rnd = gerador(11);
     const pos = new Float32Array(total * 3);
     const tam = new Float32Array(total);
@@ -1649,6 +1675,28 @@ export class Cena {
       tam[i] = rc() < 0.93 ? 0.1 + rc() * 0.16 : 0.32 + rc() * 0.2;
       fase[i] = rc();
       c.set(rc() < 0.12 ? "#ffd59a" : rc() < 0.3 ? "#a9c8ff" : "#ffffff");
+      cor.set([c.r, c.g, c.b], i * 3);
+    }
+    const rb = gerador(31);
+    const dir = new Vector3();
+    for (let i = n + nCasca; i < total; i++) {
+      // direção aleatória, aceita com mais chance perto do plano da faixa
+      let b = 1;
+      for (let tentativa = 0; tentativa < 40; tentativa++) {
+        const cz = rb() * 2 - 1;
+        const th = rb() * TAU;
+        const sz = Math.sqrt(1 - cz * cz);
+        dir.set(sz * Math.cos(th), cz, sz * Math.sin(th));
+        b = dir.dot(NORMAL_BANDA);
+        if (rb() < 0.12 + 0.88 * Math.exp((-b * b) / 0.012)) break;
+      }
+      const r = 55 + rb() * 25;
+      pos.set([dir.x * r, dir.y * r, dir.z * r], i * 3);
+      const naFaixa = Math.exp((-b * b) / 0.012);
+      tam[i] = rb() < 0.95 ? 0.42 + rb() * 0.4 : 1.1 + rb() * 0.7;
+      fase[i] = rb();
+      c.set(rb() < 0.15 ? "#ffd59a" : rb() < 0.4 ? "#a9c8ff" : "#ffffff");
+      c.multiplyScalar(0.55 + 0.35 * naFaixa + rb() * 0.35);
       cor.set([c.r, c.g, c.b], i * 3);
     }
     const g = new BufferGeometry();
@@ -2282,7 +2330,9 @@ export class Cena {
     this.apagarTotal = 0;
     this.durRetomada = 0;
     this.saltouRoteiro = false;
-    this.entradaAtual = this.opcoes.entrada === "estrela" ? "estrela" : "cadentes";
+    const entrada = this.opcoes.entrada ?? "cadentes";
+    this.entradaAtual = entrada === "estrela" ? "estrela" : "cadentes";
+    this.coreografia = entrada === "helice" || entrada === "serpente" || entrada === "raios" ? entrada : "revoada";
     const cadentes = this.entradaAtual === "cadentes";
     this.durChegada = cadentes ? (this.leve ? DUR_CHEGADA_CAD_LEVE : DUR_CHEGADA_CAD) : this.leve ? DUR_CHEGADA_LEVE : DUR_CHEGADA;
     this.modoCadentes = cadentes ? 1 : 0;
@@ -2888,7 +2938,61 @@ export class Cena {
       p[o + P_R_E] = 0.75 + rnd() * 0.35;
       p[o + P_FI_E] = ga;
       p[o + P_H0] = 0.12 + rnd() * 0.3;
+      p[o + P_TORCE] = 1;
+      const fase = (i / n) * TAU; // lugares igualmente espaçados (hélice e raios)
+      if (this.coreografia === "helice") {
+        p[o + P_FI_E] = fase;
+        p[o + P_OFASE] = fase;
+        p[o + P_OF + 2] = 0.7 + (i / n) * 2.8; // o saca-rolhas se estende à frente
+        p[o + P_T_INI] = 0.05 + (i / n) * 0.35;
+        p[o + P_R_E] = 0.95;
+      } else if (this.coreografia === "serpente") {
+        // em fila: nascem uma depois da outra e se enrolam em sequência
+        p[o + P_OF + 2] = 0.8 + i * (3.4 / Math.max(1, n - 1));
+        p[o + P_T_INI] = 0.05 + i * 0.07;
+        p[o + P_T_ESP] = 5.0 + i * 0.09;
+        p[o + P_FI_E] = -i * 0.55;
+        p[o + P_R_E] = 1.12 - i * 0.03;
+        p[o + P_H0] = 0.18;
+      } else if (this.coreografia === "raios") {
+        // anel largo e igual; no fim chegam juntas e retas, de 9 direções (uma estrela)
+        p[o + P_OFASE] = fase;
+        p[o + P_OF + 2] = 2.2 + 0.5 * Math.sin(fase * 2);
+        p[o + P_T_INI] = 0.05 + rnd() * 0.12;
+        p[o + P_T_ESP] = 5.3;
+        p[o + P_FI_E] = fase;
+        p[o + P_R_E] = 1.2;
+        p[o + P_H0] = 0.22;
+        p[o + P_TORCE] = 0;
+      }
     }
+  }
+
+  /** Deslocamento da cadente na formação de viagem (referencial do líder: lado, cima, frente). */
+  private formacaoCadente(o: number, t: number, out: Vector3): Vector3 {
+    const p = this.cadParam;
+    const kAsp = Math.max(0.5, Math.min(1, this.camera.aspect / 1.2));
+    if (this.coreografia === "helice") {
+      const f = p[o + P_OF + 2];
+      const a = p[o + P_OFASE] + 2.4 * t + f * 1.3;
+      return out.set(Math.cos(a) * 0.95 * 1.2 * kAsp, Math.sin(a) * 0.95 * 0.72, f + 0.15 * Math.sin(1.7 * t + a));
+    }
+    if (this.coreografia === "serpente") {
+      const f = p[o + P_OF + 2];
+      const i = f * 2; // fase ao longo da fila
+      return out.set(0.62 * kAsp * Math.sin(2.1 * t - i), 0.34 * Math.sin(1.4 * t - i + 1), f);
+    }
+    if (this.coreografia === "raios") {
+      const a = p[o + P_OFASE] + 0.45 * t;
+      const r = 1.45 + 0.12 * Math.sin(2 * t + p[o + P_OFASE] * 3);
+      return out.set(Math.cos(a) * r * 1.05 * kAsp, Math.sin(a) * r * 0.62, p[o + P_OF + 2]);
+    }
+    const fw = p[o + P_OW];
+    return out.set(
+      p[o + P_OF] + p[o + P_OA] * Math.sin(fw * t + p[o + P_OFASE]),
+      p[o + P_OF + 1] + p[o + P_OA + 1] * Math.sin(fw * 1.3 * t + p[o + P_OFASE + 1]),
+      p[o + P_OF + 2] + p[o + P_OA + 2] * Math.sin(fw * 0.7 * t + p[o + P_OFASE + 2]),
+    );
   }
 
   /**
@@ -2904,13 +3008,13 @@ export class Cena {
     if (k < 0) {
       const kk = Math.max(-0.9, k);
       r = p[o + P_R_E] * (1 - 1.25 * kk);
-      fi = p[o + P_FI_E] + ESP_A * kk;
+      fi = p[o + P_FI_E] + ESP_A * p[o + P_TORCE] * kk;
       zl = p[o + P_H0] - 2 * (p[o + P_H0] - Z_CENTRO) * kk;
     } else {
       const kk = saturar(k);
       const resto = 1 - kk;
       r = p[o + P_R_E] * resto ** 1.25;
-      fi = p[o + P_FI_E] + ESP_A * kk + ESP_B * kk * kk;
+      fi = p[o + P_FI_E] + (ESP_A * kk + ESP_B * kk * kk) * p[o + P_TORCE];
       zl = Z_CENTRO + (p[o + P_H0] - Z_CENTRO) * resto * resto;
     }
     const xl = Math.sin(fi) * r;
@@ -2959,10 +3063,10 @@ export class Cena {
     if (w < 1) {
       const t0 = p[o + P_T_INI];
       const abre = outCubic(faixa(t, t0 - 0.05, t0 + 0.75));
-      const fw = p[o + P_OW];
-      const l = (p[o + P_OF] + p[o + P_OA] * Math.sin(fw * t + p[o + P_OFASE])) * abre;
-      const c = (p[o + P_OF + 1] + p[o + P_OA + 1] * Math.sin(fw * 1.3 * t + p[o + P_OFASE + 1])) * abre;
-      const f = (p[o + P_OF + 2] + p[o + P_OA + 2] * Math.sin(fw * 0.7 * t + p[o + P_OFASE + 2])) * abre;
+      const fm = this.formacaoCadente(o, t, this.vForm);
+      const l = fm.x * abre;
+      const c = fm.y * abre;
+      const f = fm.z * abre;
       ox = q[b + 3] * l + q[b + 6] * c + q[b + 9] * f;
       oy = q[b + 4] * l + q[b + 7] * c + q[b + 10] * f;
       oz = q[b + 5] * l + q[b + 8] * c + q[b + 11] * f;
@@ -3655,6 +3759,7 @@ export class Cena {
     this.aplicarRevelacao(dt);
     if (this.tCelebra >= 0) this.aplicarCelebracao(dt);
     this.atualizarFaiscas(dt);
+    this.ceu?.seguir(this.camera.position);
     if (this.composer) this.composer.render();
     else this.renderer.render(this.cena, this.camera);
     this.avaliarDesempenho(dtMs, agora);

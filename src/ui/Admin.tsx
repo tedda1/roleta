@@ -20,7 +20,8 @@ import {
 } from "@/core/regras";
 import type { EstadoTotem, TotemStore } from "@/core/totem";
 import { AcoesEditor, EditorBrindes, ItemEditor } from "./EditorBrindes";
-import type { Preferencias } from "./preferencias";
+import { ENTRADAS, NOMES_ENTRADA, NOMES_SOM, SONS_FORMACAO, proximo, type Preferencias } from "./preferencias";
+import { ouvirSom } from "./ouvirSom";
 import { Teclado } from "./Teclado";
 import { CampoTexto, TecladoTexto } from "./TecladoTexto";
 import s from "./Admin.module.css";
@@ -227,8 +228,21 @@ export function Admin({ store, estado, prefs, mudarPrefs, motivo3d, fechar }: Pr
       <button className={s.botao} onClick={() => mudarPrefs({ ...prefs, qualidade: proximaQualidade(prefs.qualidade) })}>
         Qualidade 3D: {NOMES_QUALIDADE[prefs.qualidade]}
       </button>
-      <button className={s.botao} onClick={() => mudarPrefs({ ...prefs, entrada: prefs.entrada === "cadentes" ? "estrela" : "cadentes" })}>
-        Entrada 3D: {prefs.entrada === "cadentes" ? "Estrelas cadentes" : "Estrela viajante"}
+      <button className={s.botao} onClick={() => mudarPrefs({ ...prefs, entrada: proximo(ENTRADAS, prefs.entrada) })}>
+        Entrada 3D: {NOMES_ENTRADA[prefs.entrada]}
+      </button>
+      <button
+        className={s.botao}
+        onClick={() => {
+          const novo = proximo(SONS_FORMACAO, prefs.som);
+          mudarPrefs({ ...prefs, som: novo });
+          ouvirSom(novo);
+        }}
+      >
+        Som da roleta: {NOMES_SOM[prefs.som]}
+      </button>
+      <button className={s.botao} onClick={() => ouvirSom(prefs.som)}>
+        ▶ Ouvir som
       </button>
       <a className={s.botao} href="/diagnostico/">
         Diagnóstico do PC

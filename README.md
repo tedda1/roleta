@@ -6,15 +6,22 @@ feita para rodar numa **tela touch** (totem) em um PC desconhecido, **sem intern
 **Fluxo do participante:** a tela inicial mostra só o campo de CPF (com teclado numérico na tela).
 Quando o CPF é confirmado:
 
-- **3D**, com duas entradas (Administrador > **Entrada 3D**, ou `?entrada=`):
+- **3D**, com várias entradas (Administrador > **Entrada 3D**, ou `?entrada=cadentes|helice|serpente|raios|estrela`):
   - **Estrelas cadentes (padrão, ~4,5 s; ~3,2 s no leve):** a câmera **viaja pelo espaço** junto com uma
     revoada de **9 estrelas cadentes, uma para cada cor da logo** (riscos de velocidade, constelações passando,
     acendendo e se ligando às cadentes). No fim a câmera se afasta, as cadentes fecham uma espiral e,
     ao se juntarem, **formam a roleta** (flash, onda de choque, face revelada de dentro para fora,
     aro acendendo nas cores da logo, pinos, ponteiro caindo).
+  - **Coreografias das cadentes** (mesma viagem, outro desenho): **Hélice** (saca-rolhas em volta da
+    rota), **Serpente** (fila ondulando à frente, que se enrola em sequência) e **Raios de estrela**
+    (anel emoldurando a vista; no fim as 9 chegam retas de 9 direções e desenham uma estrela).
   - **Estrela viajante (~5 s; ~3,5 s no leve):** o cartão do CPF vira uma estrela que viaja pelo
     espaço, explode numa supernova e vira a roleta.
-  - No instante em que a roleta se forma toca um **som** sintetizado (whoosh + acorde + cintilar).
+  - No instante em que a roleta se forma toca um **som** sintetizado, à escolha (Administrador >
+    **Som da roleta**, ou `?som=`): *Acorde brilhante*, *Sinos*, *Cristal mágico*, *Impacto cósmico*
+    e *Fanfarra*. Trocar o som já toca o novo; o botão **▶ Ouvir som** repete.
+  - **Fundo do espaço:** nebulosas nas cores da paleta/logo e a Via Láctea (com faixas de poeira),
+    geradas uma vez na GPU ao abrir (`src/palco3d/ceu.ts`), mais estrelinhas concentradas na faixa.
   - **Toque na tela para pular.**
 - **2D:** o cartão "descola" da tela e a roleta "levanta" em perspectiva via CSS (~1,3 s).
 

@@ -42,6 +42,8 @@ export default function Palco3D({ store, fatias, fase, leve, celulaRef, aoFalhar
     cena.definirFatias(fatiasRef.current);
     cena.definirFase(faseRef.current);
     cenaRef.current = cena;
+    // Só em desenvolvimento: permite inspecionar/avançar a cena pelo console.
+    if (process.env.NODE_ENV !== "production") (window as unknown as { __cena?: Cena }).__cena = cena;
     return () => {
       cena.destruir();
       cenaRef.current = null;

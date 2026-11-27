@@ -1,16 +1,28 @@
 /**
  * Cena 3D da roleta. Herda do slide de referência a MECÂNICA (UI plana que ganha profundidade,
- * câmera viva, partículas instanciadas que formam uma figura, tudo em função do tempo) e
- * deixa de fora o que é pesado (raymarching, pós-processamento, sombras, luzes).
+ * câmera viva, partículas que formam uma figura, tudo em função do tempo) e deixa de fora o
+ * que é pesado (raymarching, pós-processamento, sombras, luzes).
  *
  * Orçamento: ~16 draw calls, < 20k triângulos, sem luzes (Basic/Matcap/shaders simples),
  * DPR ≤ 1,5, brilho por sprites aditivos. O resultado NUNCA é decidido aqui.
  *
- * Chegada (CPF confirmado): o painel de CPF "vira" centenas de folhas 3:2 que voam em
- * perspectiva e pousam sobre o disco com a cor de cada fatia (eco das folhas que formam
- * "Better." no slide); a face real aparece por baixo, aro/cubo/pinos crescem, o ponteiro cai
- * e a câmera faz um mergulho até o enquadramento final. Sem roleta (atração/CPF), nada dela
- * é desenhado.
+ * Chegada (CPF confirmado, ~8 s; ~5 s no modo leve), "Constelação: a nossa força é brilhar
+ * juntos" — cada estrela é uma pessoa, cada conexão uma parceria:
+ *  1. NASCIMENTO: no centro da tela (onde o cartão do CPF vira um ponto de luz) acende uma
+ *     estrela: núcleo quente, halo, flare de 4 pontas girando devagar, brilho pulsante.
+ *  2. VIAGEM: a estrela percorre uma curva (CatmullRom) entre as constelações e as fitas; a
+ *     câmera a persegue (atrás e de lado, com leve rolagem nas curvas). As estrelas do fundo
+ *     viram riscos de luz proporcionais à velocidade e a estrela deixa um rastro. Ao passar
+ *     perto de 3 constelações, os nós acendem e linhas de luz os ligam à estrela.
+ *  3. CHEGADA: a curva termina no centro da roleta; a estrela freia, cresce e pulsa, e a
+ *     câmera se afasta girando até o enquadramento final (o mesmo da célula do layout).
+ *  4. TRANSFORMAÇÃO: supernova curta (flash + onda de choque no plano do disco); a face se
+ *     revela de dentro para fora com borda luminosa, um arco de luz percorre o aro, os pinos
+ *     surgem como pequenas estrelas, o cubo nasce onde a estrela parou e o ponteiro cai.
+ * Tocar a tela durante a chegada pula para o pouso (~0,75 s: a viagem se apaga onde está, a
+ * câmera sai da perseguição em tempo real e a supernova segue). Ao terminar (ou quando a roleta é
+ * mostrada direto) a cena dispara `roleta:chegada-concluida` na window.
+ * Sem roleta (atração/CPF), nada dela é desenhado.
  */
 import {
   AdditiveBlending,
@@ -22,9 +34,8 @@ import {
   Color,
   CylinderGeometry,
   DoubleSide,
+  DynamicDrawUsage,
   Group,
-  InstancedBufferAttribute,
-  InstancedBufferGeometry,
   InstancedMesh,
   LineBasicMaterial,
   LineSegments,
@@ -44,22 +55,70 @@ import {
   Vector3,
   WebGLRenderer,
 } from "three";
-import { corLuz, desenharFace } from "@/arte/face";
-import { BASES_FATIA, LUZES, PALETA, familiaCanvasTitulo } from "@/arte/paleta";
+import { desenharFace } from "@/arte/face";
+import { LUZES, familiaCanvasTitulo } from "@/arte/paleta";
 import { Fatia, TAU, anguloAtual, fatiaSobPonteiro, modPositivo } from "@/core/geometria";
 import type { Fase, TotemStore } from "@/core/totem";
 
 const R = 1; // raio da roleta em unidades de cena
 const FOV = 30;
+const TAN_MEIO_FOV = Math.tan(((FOV / 2) * Math.PI) / 180);
 const MAX_PINOS = 32;
+const EIXO_Y = new Vector3(0, 1, 0);
 
 /** Fases em que a roleta existe na tela; nas demais o participante só vê o CPF. */
 const FASES_COM_ROLETA: ReadonlySet<Fase> = new Set<Fase>(["pronto", "girando", "resultado"]);
 const DUR_SAIDA = 0.8; // s
-const DUR_APRESSADA = 0.35; // s que sobram da chegada quando o giro começa no meio dela
-const INCLINACAO_DEITADA = -1.22; // disco quase deitado no início do mergulho da câmera
-const LARGURA_FOLHA_600 = 0.092; // largura da folha (3:2) com 600 folhas; escala com √(600/n)
-const DUR_VOO = 0.42; // fração da chegada que cada folha leva no ar
+const DUR_APRESSADA = 0.45; // s que sobram da chegada quando o giro começa no meio dela
+const DUR_PULO = 0.75; // s que sobram da chegada depois de um toque na tela
+/** No pulo: s reais em que a viagem se apaga onde está (no máximo 30% do que sobra). */
+const DUR_APAGAR_PULO = 0.18;
+/** Ponto do roteiro para onde o pulo salta: a estrela já está a ~0,2 u do pouso. */
+const T_RETOMA = 6.4;
+/** Câmera solta da perseguição (pulo/saída): o peso cai por exp(-dt·K), em tempo real. */
+const K_SAIDA_PERSEG = 7.5;
+/** ... e a pose de perseguição freia por exp(-dt·K) em vez de parar de uma vez. */
+const K_FREIO_PERSEG = 6;
+const IGNORA_TOQUE_MS = 300; // o toque que confirmou o CPF não pode pular a chegada
+const EVENTO_CHEGADA = "roleta:chegada-concluida";
+const INCLINACAO_ATIVA = -0.42;
+
+// ---------- roteiro da chegada (segundos do roteiro base de 8 s; o modo leve comprime) ----------
+const DUR_CHEGADA = 8;
+const DUR_CHEGADA_LEVE = 5;
+const T_PARTIDA = 0.8; // fim do nascimento, a estrela parte
+const T_POUSO = 6.6; // a estrela para no centro da roleta: supernova
+const T_FIM = 8;
+/** Perfil de velocidade da viagem (trapézio): fração acelerando e fração freando. */
+const ACEL = 0.14;
+const FREIO = 0.22;
+const VMAX = 1 / (1 - ACEL / 2 - FREIO / 2);
+const D_ATRAS = 2.2; // distância (ao longo da curva) da câmera de perseguição atrás da estrela
+const CAIXA_WARP = 22; // lado do cubo de riscos que acompanha a câmera
+const N_GRUPOS = 5; // constelações do céu (criarConstelacoes)
+const GRUPOS_ACESOS = 3;
+const MAX_AMOSTRAS = 90; // janela da avaliação de desempenho (quadros)
+
+/**
+ * Pontos fixos da rota, no mundo. Antes deles vêm o nascimento (centro da tela) e um ponto
+ * logo à frente; depois, o centro da roleta. Passa entre constelações e entre as fitas;
+ * ~51 unidades, ~11 u/s no cruzeiro, raio de curva mínimo ~1 (sem quinas para a câmera).
+ */
+const ROTA: readonly (readonly [number, number, number])[] = [
+  [-2.0, 0.1, -6.2], // entre as duas constelações da esquerda, entre as fitas
+  [-0.6, 1.3, -10.5], // por baixo da constelação do alto
+  [1.5, 0.8, -14.4], // fundo do céu: curva larga para a direita
+  [4.2, 0.3, -15.4],
+  [6.4, -0.2, -13.4],
+  [6.4, -0.1, -10.2], // voltando
+  [4.5, 0.5, -6.4], // rente à constelação da direita
+  [4.4, 0.9, 0.4], // ao lado da roleta, entre as fitas
+  [4.4, 1.1, 3.0], // laço do lado da câmera
+  [3.9, 1.25, 4.4],
+  [2.7, 1.35, 4.95],
+  [1.5, 1.1, 4.4],
+  [1.0, 0.85, 3.2], // aproximação final
+];
 
 type ModoRevelacao = "oculta" | "chegando" | "visivel" | "saindo";
 
@@ -71,6 +130,7 @@ function suave(x: number, a: number, b: number): number {
   return k * k * (3 - 2 * k);
 }
 const inOutCubic = (k: number) => (k < 0.5 ? 4 * k * k * k : 1 - (-2 * k + 2) ** 3 / 2);
+const outCubic = (k: number) => 1 - (1 - k) ** 3;
 const C1 = 1.70158;
 const C3 = C1 + 1;
 const outBack = (k: number) => 1 + C3 * (k - 1) ** 3 + C1 * (k - 1) ** 2;
@@ -89,13 +149,6 @@ function outBounce(k: number): number {
   }
   const x = k - 2.625 / d1;
   return n1 * x * x + 0.984375;
-}
-
-/** Mesma regra de corBase em arte/face.ts (lá não é exportada): base escura da fatia i. */
-function corBaseFatia(i: number, n: number): string {
-  let c = i % BASES_FATIA.length;
-  if (n > 1 && i === n - 1 && c === 0) c = 2;
-  return BASES_FATIA[c];
 }
 
 export interface OpcoesCena {
@@ -169,6 +222,46 @@ function texturaEstrela4(): CanvasTexture {
   });
 }
 
+/** Máscara (no alfa) do halo da estrela viajante. */
+function texturaHaloEstrela(): CanvasTexture {
+  return texturaCanvas(128, (ctx, l) => {
+    const c = l / 2;
+    const g = ctx.createRadialGradient(c, c, 0, c, c, c);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.07, "rgba(255,255,255,0.9)");
+    g.addColorStop(0.18, "rgba(255,255,255,0.4)");
+    g.addColorStop(0.45, "rgba(255,255,255,0.1)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, l, l);
+  });
+}
+
+/** Máscara (no alfa) dos raios em cruz: dois losangos finos com gradiente radial. */
+function texturaRaios(): CanvasTexture {
+  return texturaCanvas(256, (ctx, l) => {
+    const c = l / 2;
+    const g = ctx.createRadialGradient(c, c, 0, c, c, c);
+    g.addColorStop(0, "rgba(255,255,255,1)");
+    g.addColorStop(0.2, "rgba(255,255,255,0.5)");
+    g.addColorStop(0.6, "rgba(255,255,255,0.12)");
+    g.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = g;
+    const e = l * 0.016;
+    for (const [dx, dy] of [[1, 0], [0, 1]]) {
+      ctx.beginPath();
+      ctx.moveTo(c - dx * c, c - dy * c);
+      ctx.lineTo(c + dy * e, c + dx * e);
+      ctx.lineTo(c + dx * c, c + dy * c);
+      ctx.lineTo(c - dy * e, c - dx * e);
+      ctx.closePath();
+      ctx.fill();
+    }
+  });
+}
+
+// tamanho limitado (proporcional à tela): estrelas que passam rente à câmera na viagem não
+// viram manchas gigantes; no enquadramento normal nenhum ponto chega perto do limite
 const VERT_PONTOS = /* glsl */ `
   attribute float aTam;
   attribute float aFase;
@@ -182,7 +275,7 @@ const VERT_PONTOS = /* glsl */ `
     float tw = 0.6 + 0.4 * sin(uTempo * (0.8 + aFase) + aFase * 40.0);
     vBrilho = tw;
     vCor = aCor;
-    gl_PointSize = aTam * uEscala * (0.7 + 0.3 * tw) / -mv.z;
+    gl_PointSize = min(uEscala * 0.06, aTam * uEscala * (0.7 + 0.3 * tw) / -mv.z);
     gl_Position = projectionMatrix * mv;
   }
 `;
@@ -264,72 +357,256 @@ const FRAG_ENXAME = /* glsl */ `
 `;
 
 /**
- * Folhas da chegada. A origem fica no espaço da CÂMERA (presa à tela, onde estava o painel de
- * CPF) e o alvo no espaço local do DISCO (gira com a roleta e acompanha o mergulho da câmera).
- * A interpolação acontece no espaço da câmera, então o mesmo quad sai "de frente" e pousa
- * deitado no disco, com o lado maior na tangente.
+ * Face da roleta com revelação radial: amostra a MESMA CanvasTexture (sRGB, decodificada pela
+ * GPU) e converte para a saída com colorspace_fragment. Com uRaio ≥ 1 e uBorda = 0 o resultado
+ * é idêntico ao MeshBasicMaterial({ map, transparent }) de antes.
  */
-const VERT_FOLHAS = /* glsl */ `
-  attribute vec3 aOrigem;
-  attribute vec3 aAlvo;
-  attribute float aAtraso;
-  attribute vec4 aGiro;
-  attribute vec3 aCor;
-  attribute float aArco;
-  uniform mat4 uMatrizDisco;
-  uniform float uProg;
-  uniform float uDurVoo;
-  uniform float uEscalaOrigem;
-  varying vec3 vCor;
+const VERT_FACE = /* glsl */ `
   varying vec2 vUv;
-  varying float vLuz;
-  varying float vM;
-  vec3 girar(vec3 v, vec3 e, float a) {
-    float c = cos(a);
-    float s = sin(a);
-    return v * c + cross(e, v) * s + e * dot(e, v) * (1.0 - c);
-  }
+  varying vec2 vP;
   void main() {
-    float m = clamp((uProg - aAtraso) / uDurVoo, 0.0, 1.0);
-    float e = 1.0 - pow(1.0 - m, 3.0);
-    mat4 mvDisco = viewMatrix * uMatrizDisco;
-    float ang = atan(aAlvo.x, aAlvo.y);
-    float ca = cos(ang);
-    float sa = sin(ang);
-    vec2 local = vec2(position.x * ca + position.y * sa, -position.x * sa + position.y * ca);
-    vec3 centroAlvo = (mvDisco * vec4(aAlvo, 1.0)).xyz;
-    vec3 cantoAlvo = (mvDisco * vec4(local, 0.0, 0.0)).xyz;
-    vec3 normalAlvo = normalize((mvDisco * vec4(0.0, 0.0, 1.0, 0.0)).xyz);
-    float arco = sin(3.14159265 * e);
-    vec3 centro = mix(aOrigem, centroAlvo, e);
-    centro.z += arco * aArco;
-    centro.xy += arco * aArco * 0.18 * vec2(aGiro.y, -aGiro.x);
-    // zero na decolagem e no pouso: a folha sai "de frente" (como o cartão) e pousa deitada
-    float giro = aGiro.w * sin(3.14159265 * e);
-    vec3 canto = girar(mix(position * uEscalaOrigem, cantoAlvo, e), aGiro.xyz, giro);
-    vec3 n = girar(normalize(mix(vec3(0.0, 0.0, 1.0), normalAlvo, e) + vec3(0.0, 0.0, 1e-3)), aGiro.xyz, giro);
-    vLuz = abs(n.z);
-    vCor = aCor;
     vUv = uv;
-    vM = m;
-    gl_Position = projectionMatrix * vec4(centro + canto, 1.0);
+    vP = position.xy;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
 
-const FRAG_FOLHAS = /* glsl */ `
-  uniform float uAlfa;
-  uniform float uSumir;
-  varying vec3 vCor;
+const FRAG_FACE = /* glsl */ `
+  uniform sampler2D uMapa;
+  uniform float uRaio;
+  uniform float uBorda;
+  uniform float uOpacidade;
   varying vec2 vUv;
-  varying float vLuz;
-  varying float vM;
+  varying vec2 vP;
   void main() {
-    vec2 b = min(vUv, 1.0 - vUv);
-    float borda = 1.0 - smoothstep(0.0, 0.08, min(b.x, b.y / 1.5));
-    float reflexo = pow(vLuz, 10.0) * (1.0 - vM);
-    vec3 cor = vCor * (0.45 + 0.65 * vLuz) + vec3(0.85, 0.92, 1.0) * (borda * 0.28 + reflexo * 0.45);
-    float a = uAlfa * (1.0 - uSumir * vM) * 0.95;
+    vec4 tex = texture2D(uMapa, vUv);
+    float r = length(vP);
+    float dentro = 1.0 - smoothstep(uRaio - 0.05, uRaio, r);
+    float db = (r - uRaio + 0.02) / 0.035;
+    float borda = uBorda * exp(-db * db);
+    vec3 cor = tex.rgb * dentro + vec3(1.0, 0.78, 0.42) * borda;
+    float a = clamp(dentro + borda, 0.0, 1.0) * tex.a * uOpacidade;
     gl_FragColor = vec4(cor, a);
+    #include <colorspace_fragment>
+  }
+`;
+
+/** Estrela viajante: 1 quad virado para a câmera, halo + raios em cruz (2 máscaras) + núcleo. */
+const VERT_UV = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const FRAG_ESTRELA = /* glsl */ `
+  uniform sampler2D uHalo;
+  uniform sampler2D uRaios;
+  uniform float uGiro;
+  uniform float uBrilho;
+  uniform float uRaiosForca;
+  uniform float uMestre;
+  uniform vec3 uCor;
+  varying vec2 vUv;
+  void main() {
+    vec2 c = vUv - 0.5;
+    float cs = cos(uGiro);
+    float sn = sin(uGiro);
+    vec2 r1 = vec2(c.x * cs - c.y * sn, c.x * sn + c.y * cs);
+    vec2 r2 = vec2(r1.x - r1.y, r1.x + r1.y) * 1.2; // cruz menor a 45°
+    float halo = texture2D(uHalo, c * 1.7 + 0.5).a;
+    float raios = texture2D(uRaios, r1 + 0.5).a + 0.35 * texture2D(uRaios, r2 + 0.5).a;
+    float nucleo = exp(-dot(c, c) * 1500.0);
+    vec3 cor = uCor * (halo * 0.95 + raios * uRaiosForca) + vec3(1.0) * (nucleo * 1.6 + halo * halo * 0.55);
+    gl_FragColor = vec4(cor * uBrilho * uMestre, 1.0);
+  }
+`;
+
+/** Rastro: faixa sobre a própria curva, atrás da estrela; afina e desbota na cauda. */
+const VERT_RASTRO = /* glsl */ `
+  attribute float aAo;
+  attribute float aLado;
+  varying float vAo;
+  varying float vLado;
+  void main() {
+    vAo = aAo;
+    vLado = aLado;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const FRAG_RASTRO = /* glsl */ `
+  uniform float uAlfa;
+  uniform float uMestre;
+  uniform vec3 uCorCabeca;
+  uniform vec3 uCorMeio;
+  uniform vec3 uCorCauda;
+  varying float vAo;
+  varying float vLado;
+  void main() {
+    float b = 1.0 - abs(vLado);
+    float nucleo = pow(b, 5.0) * 1.2 + b * 0.3;
+    float desbota = pow(1.0 - vAo, 1.6);
+    vec3 cor = mix(uCorCabeca, uCorMeio, smoothstep(0.0, 0.3, vAo));
+    cor = mix(cor, uCorCauda, smoothstep(0.3, 1.0, vAo));
+    gl_FragColor = vec4(cor * nucleo * desbota * uAlfa * uMestre, 1.0);
+  }
+`;
+
+/**
+ * Riscos de velocidade (hiperespaço): cada risco tem uma base fixa num cubo que "dá a volta"
+ * em torno da câmera (mod), e a ponta é esticada na direção do movimento. 1 draw call.
+ */
+const VERT_WARP = /* glsl */ `
+  attribute float aPonta;
+  attribute vec3 aCor;
+  uniform vec3 uCam;
+  uniform vec3 uVel;
+  uniform float uEstica;
+  uniform float uForca;
+  uniform float uCaixa;
+  varying vec3 vCor;
+  varying float vA;
+  void main() {
+    vec3 rel = mod(position - uCam + 0.5 * uCaixa, uCaixa) - 0.5 * uCaixa;
+    float d = length(rel);
+    vec3 p = uCam + rel + uVel * uEstica * aPonta;
+    vA = uForca * (1.0 - 0.85 * aPonta) * smoothstep(0.5 * uCaixa, 0.28 * uCaixa, d) * smoothstep(0.4, 1.6, d);
+    vCor = aCor;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  }
+`;
+
+const FRAG_WARP = /* glsl */ `
+  uniform float uMestre;
+  varying vec3 vCor;
+  varying float vA;
+  void main() {
+    gl_FragColor = vec4(vCor * vA * uMestre, 1.0);
+  }
+`;
+
+/** Brilho de cada constelação (uniform array) lido por grupo, sem indexação dinâmica. */
+const GLSL_ACESO = /* glsl */ `
+  uniform float uAceso[${N_GRUPOS}];
+  float acesoDe(float g) {
+    float ac = 0.0;
+    for (int i = 0; i < ${N_GRUPOS}; i++) ac += uAceso[i] * (1.0 - step(0.5, abs(g - float(i))));
+    return ac;
+  }
+`;
+
+/** Ligações: linhas do grupo (nó→nó) e da estrela a cada nó (a ponta segue uEstrela). */
+const VERT_LIGACOES = /* glsl */ `
+  attribute float aPonta;
+  attribute float aGrupo;
+  attribute float aTipo;
+  uniform vec3 uEstrela;
+  ${GLSL_ACESO}
+  varying float vA;
+  varying float vPonta;
+  varying float vTipo;
+  void main() {
+    vA = acesoDe(aGrupo);
+    vPonta = aPonta;
+    vTipo = aTipo;
+    vec3 p = mix(position, uEstrela, aPonta);
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
+  }
+`;
+
+const FRAG_LIGACOES = /* glsl */ `
+  uniform float uTempo;
+  uniform float uMestre;
+  varying float vA;
+  varying float vPonta;
+  varying float vTipo;
+  void main() {
+    float pulso = 0.5 + 0.5 * sin(vPonta * 18.0 - uTempo * 14.0);
+    float aEstrela = vA * (0.3 + 0.7 * pulso) * (0.45 + 0.55 * vPonta);
+    float a = mix(vA * 0.85, aEstrela, vTipo) * uMestre;
+    vec3 cor = mix(vec3(0.62, 0.76, 1.0), vec3(1.0, 0.86, 0.55), vTipo);
+    gl_FragColor = vec4(cor * a, 1.0);
+  }
+`;
+
+/** Nós das constelações que acendem quando a estrela passa. */
+const VERT_NOS = /* glsl */ `
+  attribute float aGrupo;
+  attribute float aTam;
+  uniform float uEscala;
+  ${GLSL_ACESO}
+  varying float vA;
+  void main() {
+    float ac = acesoDe(aGrupo);
+    vA = ac;
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_PointSize = ac < 0.002 ? 0.0 : min(uEscala * 0.08, aTam * (0.7 + 1.5 * ac) * uEscala / -mv.z);
+    gl_Position = projectionMatrix * mv;
+  }
+`;
+
+const FRAG_NOS = /* glsl */ `
+  uniform float uMestre;
+  varying float vA;
+  void main() {
+    float d = length(gl_PointCoord - 0.5);
+    float a = smoothstep(0.5, 0.0, d);
+    float nucleo = smoothstep(0.12, 0.0, d);
+    vec3 cor = vec3(1.0, 0.86, 0.55) * a * a + vec3(1.0) * nucleo;
+    gl_FragColor = vec4(cor * vA * uMestre, 1.0);
+  }
+`;
+
+/**
+ * Anel da transformação, no plano do disco: onda de choque que se expande e arco de luz que
+ * percorre o aro (horário, a partir das 12h) com uma estrela na cabeça. O quad cresce com a
+ * onda (uRaioQuad) para não pintar a tela inteira à toa.
+ */
+const VERT_ANEL = /* glsl */ `
+  uniform float uRaioQuad;
+  varying vec2 vP;
+  void main() {
+    vP = position.xy * uRaioQuad;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const FRAG_ANEL = /* glsl */ `
+  uniform float uOnda;
+  uniform float uAlfaOnda;
+  uniform float uArco;
+  uniform float uAlfaArco;
+  uniform float uMestre;
+  varying vec2 vP;
+  void main() {
+    float r = length(vP);
+    float esp = 0.04 + 0.1 * uOnda;
+    float dOnda = (r - uOnda) / esp;
+    // descarte cedo (antes de atan/exp): fora da coroa da onda e do seu recheio, e longe do aro
+    // (a cabeça do arco e a cruz cabem na faixa ALCANCE_ARO em torno dele)
+    bool naOnda = uAlfaOnda > 0.002 && (abs(dOnda) < 3.0 || (r < uOnda && uAlfaOnda > 0.08));
+    bool noAro = uAlfaArco > 0.002 && abs(r - 1.005) < ALCANCE_ARO;
+    if (!naOnda && !noAro) discard;
+    float onda = exp(-dOnda * dOnda) + 0.12 * step(r, uOnda) * (r / max(uOnda, 0.001));
+    onda *= uAlfaOnda;
+    float arco = min(uArco, 6.2831853);
+    float ang = mod(atan(vP.x, vP.y), 6.2831853);
+    float atras = arco - ang;
+    float rastro = step(0.0, atras) * (0.3 + 0.7 * exp(-atras * 1.6));
+    float dAro = (r - 1.005) / 0.028;
+    float faixaAro = exp(-dAro * dAro);
+    vec2 d = vP - vec2(sin(arco), cos(arco)) * 1.005;
+    float cabeca = 0.0009 / (dot(d, d) + 0.0009);
+    #if COM_CRUZ
+    float cruz = exp(-abs(d.x) * 90.0) * exp(-abs(d.y) * 9.0) + exp(-abs(d.y) * 90.0) * exp(-abs(d.x) * 9.0);
+    #else
+    float cruz = 0.0;
+    #endif
+    float luz = (faixaAro * rastro + cabeca * 1.4 + cruz * 0.8) * uAlfaArco;
+    vec3 cor = vec3(1.0, 0.86, 0.55) * onda + vec3(1.0, 0.9, 0.62) * luz;
+    gl_FragColor = vec4(cor * uMestre, 1.0);
   }
 `;
 
@@ -337,6 +614,15 @@ interface Faisca {
   vida: number;
   pos: Vector3;
   vel: Vector3;
+}
+
+interface GrupoConstelacao {
+  centro: Vector3;
+  nos: Vector3[];
+  /** distância mínima da rota atual ao centro (calculada a cada chegada) */
+  dMin: number;
+  ativo: boolean;
+  memoria: number;
 }
 
 export class Cena {
@@ -363,7 +649,7 @@ export class Cena {
   private halo: Mesh;
   private matHalo: MeshBasicMaterial;
   private face: Mesh;
-  private matFace: MeshBasicMaterial;
+  private uFace: { uMapa: { value: CanvasTexture }; uRaio: { value: number }; uBorda: { value: number }; uOpacidade: { value: number } };
   private lateral: Mesh;
   private fundo: Mesh;
   private aro: Mesh;
@@ -373,31 +659,113 @@ export class Cena {
   private brilho: Mesh;
   private matBrilho: MeshBasicMaterial;
   private matrizPino = new Matrix4();
+  private pinoEmitido = new Uint8Array(MAX_PINOS);
+  /** ângulo (horário, desde as 12h) já percorrido pelo arco de luz; Infinity = pinos prontos */
+  private arcoPinos = Infinity;
+  private thetaAtual = 0;
 
-  // folhas da chegada (1 draw call)
-  private folhas: Mesh;
-  private matFolhas: ShaderMaterial;
-  private nFolhas: number;
-  private larguraFolha: number;
-  private ordemFolhas: Uint16Array;
-  private chaveFolhas: Float32Array;
-  private rndFolhas = gerador(97);
-  private corTmp = new Color();
-  private corTmp2 = new Color();
-  private vTmp = new Vector3();
+  // ---------- chegada: estrela viajante (até 6 draw calls extras, só durante a chegada) ----------
+  private uMestre = { value: 1 }; // apaga tudo da viagem de uma vez (saída no meio)
+  private estrelaViajante: Mesh;
+  private uEstrela = {
+    uHalo: { value: null as CanvasTexture | null },
+    uRaios: { value: null as CanvasTexture | null },
+    uGiro: { value: 0 },
+    uBrilho: { value: 0 },
+    uRaiosForca: { value: 1 },
+    uMestre: this.uMestre,
+    uCor: { value: new Color("#ffd98a") },
+  };
+  private rastro: Mesh;
+  private nRastro: number;
+  private pontosRastro: Float32Array;
+  private uRastro = {
+    uAlfa: { value: 1 },
+    uMestre: this.uMestre,
+    uCorCabeca: { value: new Color("#fff1c9") },
+    uCorMeio: { value: new Color(LUZES[4]) },
+    uCorCauda: { value: new Color(LUZES[0]) },
+  };
+  private warp: LineSegments;
+  private uWarp = {
+    uCam: { value: new Vector3() },
+    uVel: { value: new Vector3() },
+    uEstica: { value: 0 },
+    uForca: { value: 0 },
+    uCaixa: { value: CAIXA_WARP },
+    uMestre: this.uMestre,
+  };
+  private gruposConst: GrupoConstelacao[] = [];
+  private aceso = new Float32Array(N_GRUPOS);
+  private ligacoes!: LineSegments;
+  private nosAcesos!: Points;
+  private uEstrelaPos = { value: new Vector3() };
+  private anel: Mesh;
+  private uAnel = {
+    uRaioQuad: { value: 1.2 },
+    uOnda: { value: 0 },
+    uAlfaOnda: { value: 0 },
+    uArco: { value: 0 },
+    uAlfaArco: { value: 0 },
+    uMestre: this.uMestre,
+  };
+
+  // rota da viagem (pontos pré-alocados; a curva é refeita uma vez por chegada)
+  private pontosCurva: Vector3[] = Array.from({ length: ROTA.length + 3 }, () => new Vector3());
+  private curva = new CatmullRomCurve3(this.pontosCurva, false, "centripetal");
+  private compCurva = 0;
+  private velCruzeiro = 0;
+  private sViagem = 0;
+  private velViagem = 0;
+  private viagemPendente = false;
+  private supernovaEmitida = false;
+  /** 0 = câmera no enquadramento da célula, 1 = câmera de perseguição */
+  private pesoPerseguicao = 0;
+  /** posição (0..1) na curva usada pela pose de perseguição; = sViagem até a câmera se soltar */
+  private sPerseg = 0;
+  /** velocidade (fração da curva por s real) da pose solta; freia sozinha */
+  private velPerseg = 0;
+  /** pulo/saída: a câmera deixa de seguir o roteiro e sai da perseguição em tempo real */
+  private perseguicaoSolta = false;
+  /** pulo: s reais que faltam para a viagem terminar de se apagar (o roteiro fica parado) */
+  private apagarRestante = 0;
+  private apagarTotal = 0;
+  /** pulo: s reais do salto do roteiro (T_RETOMA) até o fim da chegada */
+  private durRetomada = 0;
+  /** o roteiro saltou para perto do pouso: o rastro antigo não volta */
+  private saltouRoteiro = false;
+  /** brilho geral da viagem nesta chegada (apaga no pulo, reacende no pouso) */
+  private mestreChegada = 1;
+  private rolagemPerseg = 0;
+
+  // vetores de trabalho (nada é alocado por quadro)
+  private vA = new Vector3();
+  private vB = new Vector3();
+  private vT1 = new Vector3();
+  private vEstrela = new Vector3();
+  private vTanEstrela = new Vector3();
+  private vBase = new Vector3();
+  private vTanCam = new Vector3();
+  private vLado = new Vector3();
+  private vCima = new Vector3();
+  private vLadoRastro = new Vector3(1, 0, 0);
+  private posEnq = new Vector3();
+  private posPerseg = new Vector3();
+  private alvoPerseg = new Vector3();
 
   // revelação da roleta: 0 = só a tela de CPF, 1 = roleta inteira no lugar
   private modoRevelacao: ModoRevelacao = "oculta";
   private revelacao = 0;
   private tRevelacao = 0;
+  /** tempo no roteiro base (0..T_FIM) */
+  private tau = 0;
+  private dtRoteiro = 0;
   private durChegada: number;
   private fatorChegada = 1;
+  private inicioChegada = 0;
   private rSaida = 1;
   private brilhoSaidaEmitido = false;
   private reavaliado = false;
-  private folhasPendentes = false;
-  /** 1 = câmera no início do mergulho (longe, alta), 0 = enquadramento normal. */
-  private afastamento = 0;
   private distBase = 7;
   private primeiraFase = true;
 
@@ -410,12 +778,17 @@ export class Cena {
   private indicePonteiro = -2;
   private balanco = 0;
   private inclinacaoAtual = 0;
+  /** amplitude da deriva/parallax e elevação extra da fase ativa, amortecidas (sem salto) */
+  private ampAtual = 1;
+  private elAtivo = 0;
   private aproximacao = 0;
   private mixEnxame = 0;
   private alfaEnxame = 0;
   private tempoResultado = 0;
   private parallax = { x: 0, y: 0, ax: 0, ay: 0 };
-  private amostrasQuadro: number[] = [];
+  /** amostras da avaliação inicial, mantidas ORDENADAS (inserção): mediana sem alocar */
+  private amostrasQuadro = new Float32Array(MAX_AMOSTRAS);
+  private nAmostras = 0;
   private inicio = performance.now();
   private avaliado = false;
   private dprAtual = 1;
@@ -432,7 +805,8 @@ export class Cena {
     private opcoes: OpcoesCena,
   ) {
     this.leve = opcoes.leve;
-    this.durChegada = this.leve ? 1.8 : 2.6;
+    this.ampAtual = this.leve ? 0 : 1;
+    this.durChegada = this.leve ? DUR_CHEGADA_LEVE : DUR_CHEGADA;
     this.renderer = new WebGLRenderer({ antialias: !this.leve, alpha: false, stencil: false, powerPreference: "high-performance" });
     this.renderer.setClearColor(new Color("#0a2248"));
     this.dprAtual = Math.min(window.devicePixelRatio || 1, this.leve ? 1 : 1.5);
@@ -474,9 +848,10 @@ export class Cena {
     this.texturaFace = new CanvasTexture(this.canvasFace);
     this.texturaFace.colorSpace = SRGBColorSpace;
     this.texturaFace.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
-    // transparente para surgir por opacidade sob as folhas (depthWrite continua ligado)
-    this.matFace = new MeshBasicMaterial({ map: this.texturaFace, transparent: true });
-    this.face = new Mesh(new CircleGeometry(R, 96), this.matFace);
+    // transparente (depthWrite continua ligado) e com revelação radial na chegada
+    this.uFace = { uMapa: { value: this.texturaFace }, uRaio: { value: 2 }, uBorda: { value: 0 }, uOpacidade: { value: 1 } };
+    const matFace = new ShaderMaterial({ uniforms: this.uFace, vertexShader: VERT_FACE, fragmentShader: FRAG_FACE, transparent: true });
+    this.face = new Mesh(new CircleGeometry(R, 96), matFace);
     this.face.position.z = 0.001;
     this.disco.add(this.face);
 
@@ -551,7 +926,7 @@ export class Cena {
     this.descartaveis.push(this.matEnxame);
     this.enxame = this.criarEnxame(this.leve ? 500 : 1100);
     this.enxame.visible = false;
-    // a face é transparente (para aparecer por opacidade): enxame e faíscas vão depois dela
+    // a face é transparente: enxame e faíscas vão depois dela
     this.enxame.renderOrder = 2;
     this.cena.add(this.enxame);
 
@@ -559,29 +934,18 @@ export class Cena {
     this.faiscas.renderOrder = 2;
     this.cena.add(this.faiscas);
 
-    // ---------- chegada: folhas que viram roleta ----------
-    this.nFolhas = this.leve ? 250 : 600;
-    this.larguraFolha = LARGURA_FOLHA_600 * Math.sqrt(600 / this.nFolhas);
-    this.ordemFolhas = new Uint16Array(this.nFolhas);
-    this.chaveFolhas = new Float32Array(this.nFolhas);
-    this.matFolhas = new ShaderMaterial({
-      uniforms: {
-        uMatrizDisco: { value: this.disco.matrixWorld },
-        uProg: { value: 0 },
-        uDurVoo: { value: DUR_VOO },
-        uEscalaOrigem: { value: 1 },
-        uAlfa: { value: 0 },
-        uSumir: { value: 0 },
-      },
-      vertexShader: VERT_FOLHAS,
-      fragmentShader: FRAG_FOLHAS,
-      transparent: true,
-      depthWrite: false,
-      side: DoubleSide,
-    });
-    this.descartaveis.push(this.matFolhas);
-    this.folhas = this.criarFolhas(this.nFolhas);
-    this.cena.add(this.folhas);
+    // ---------- chegada: estrela viajante ----------
+    this.estrelaViajante = this.criarEstrelaViajante();
+    this.cena.add(this.estrelaViajante);
+    this.nRastro = this.leve ? 36 : 64;
+    this.pontosRastro = new Float32Array(this.nRastro * 3);
+    this.rastro = this.criarRastro(this.nRastro);
+    this.cena.add(this.rastro);
+    this.warp = this.criarWarp(this.leve ? 160 : 560);
+    this.cena.add(this.warp);
+    this.criarLigacoes();
+    this.anel = this.criarAnel();
+    this.inclinacao.add(this.anel);
 
     this.redimensionar();
     window.addEventListener("resize", this.redimensionar);
@@ -589,11 +953,11 @@ export class Cena {
     window.addEventListener("pointerdown", this.tocarFundo, { passive: true });
     document.fonts?.ready.then(() => !this.destruido && this.redesenharFace());
 
-    // pré-compila os shaders antes do primeiro giro; falha de shader = volta para o 2D
-    // (folhas e enxame ficam visíveis só durante a compilação, para não travar na 1ª chegada)
+    // pré-compila os shaders antes da 1ª chegada; falha de shader = volta para o 2D
+    // (peças da viagem e enxame ficam visíveis só durante a compilação)
     this.renderer.debug.onShaderError = () => this.falhar("falha ao compilar shader");
-    this.folhas.visible = true;
-    this.enxame.visible = true;
+    const daViagem: { visible: boolean }[] = [this.estrelaViajante, this.rastro, this.warp, this.ligacoes, this.nosAcesos, this.anel, this.enxame];
+    daViagem.forEach((o) => (o.visible = true));
     this.renderer.compile(this.cena, this.camera);
     this.enxame.visible = false;
     this.aplicarOculta();
@@ -603,11 +967,15 @@ export class Cena {
   // ---------- construção ----------
   private criarEstrelas(): Points {
     const n = this.leve ? 900 : 1800;
+    // casca de estrelas ao redor de toda a cena, só nas direções que a câmera final NÃO vê:
+    // dá céu à viagem quando a câmera olha para trás/lados, sem mudar o fundo final
+    const nCasca = this.leve ? 900 : 2200;
+    const total = n + nCasca;
     const rnd = gerador(11);
-    const pos = new Float32Array(n * 3);
-    const tam = new Float32Array(n);
-    const fase = new Float32Array(n);
-    const cor = new Float32Array(n * 3);
+    const pos = new Float32Array(total * 3);
+    const tam = new Float32Array(total);
+    const fase = new Float32Array(total);
+    const cor = new Float32Array(total * 3);
     const c = new Color();
     for (let i = 0; i < n; i++) {
       const z = -3 - rnd() * 30;
@@ -618,6 +986,31 @@ export class Cena {
       tam[i] = rnd() < 0.94 ? 0.04 + rnd() * 0.06 : 0.14 + rnd() * 0.16;
       fase[i] = rnd();
       c.set(rnd() < 0.12 ? "#ffd59a" : rnd() < 0.3 ? "#a9c8ff" : "#ffffff");
+      cor.set([c.r, c.g, c.b], i * 3);
+    }
+    const rc = gerador(23);
+    for (let i = n; i < total; i++) {
+      let x = 0;
+      let y = 0;
+      let z = 0;
+      for (let tentativa = 0; tentativa < 24; tentativa++) {
+        const th = rc() * TAU;
+        const cz = rc() * 2 - 1;
+        const s = Math.sqrt(1 - cz * cz);
+        const r = 12 + rc() * 36;
+        x = s * Math.cos(th) * r;
+        y = s * Math.sin(th) * r * 0.8;
+        z = cz * r;
+        // vista da câmera final (~(0; 0,7; 6) olhando para -z): fora de um cone de ~52°
+        const dx = x;
+        const dy = y - 0.7;
+        const dz = z - 6;
+        if (-dz / Math.sqrt(dx * dx + dy * dy + dz * dz) < 0.62) break;
+      }
+      pos.set([x, y, z], i * 3);
+      tam[i] = rc() < 0.93 ? 0.1 + rc() * 0.16 : 0.32 + rc() * 0.2;
+      fase[i] = rc();
+      c.set(rc() < 0.12 ? "#ffd59a" : rc() < 0.3 ? "#a9c8ff" : "#ffffff");
       cor.set([c.r, c.g, c.b], i * 3);
     }
     const g = new BufferGeometry();
@@ -634,7 +1027,9 @@ export class Cena {
       blending: AdditiveBlending,
     });
     this.descartaveis.push(g, m);
-    return new Points(g, m);
+    const p = new Points(g, m);
+    p.frustumCulled = false; // a câmera viaja por dentro da nuvem
+    return p;
   }
 
   private criarConstelacoes(): Group {
@@ -648,12 +1043,18 @@ export class Cena {
     for (const [cx, cy, cz] of centros) {
       let ant: number[] | null = null;
       const q = 4 + Math.floor(rnd() * 3);
+      const nosGrupo: Vector3[] = [];
+      const centro = new Vector3();
       for (let k = 0; k < q; k++) {
         const p = [cx + (rnd() - 0.5) * 2.2, cy + (rnd() - 0.5) * 1.6, cz + (rnd() - 0.5)];
         nos.push(...p);
         if (ant) linhas.push(...ant, ...p);
         ant = p;
+        const v = new Vector3(p[0], p[1], p[2]);
+        nosGrupo.push(v);
+        centro.add(v);
       }
+      this.gruposConst.push({ centro: centro.divideScalar(q), nos: nosGrupo, dMin: Infinity, ativo: false, memoria: 0 });
     }
     const gl = new BufferGeometry();
     gl.setAttribute("position", new BufferAttribute(new Float32Array(linhas), 3));
@@ -819,114 +1220,193 @@ export class Cena {
     return p;
   }
 
-  /**
-   * Folhas 3:2 instanciadas (1 draw call). Alvo fixo: espiral de Vogel numa coroa do disco
-   * (uniforme por área). Origem e cor são preenchidas a cada chegada (prepararFolhas).
-   */
-  private criarFolhas(n: number): Mesh {
-    const rnd = gerador(41);
-    const w = this.larguraFolha / 2;
-    const h = this.larguraFolha / 3;
-    const g = new InstancedBufferGeometry();
-    g.setAttribute("position", new BufferAttribute(new Float32Array([-w, -h, 0, w, -h, 0, -w, h, 0, w, h, 0]), 3));
-    g.setAttribute("uv", new BufferAttribute(new Float32Array([0, 0, 1, 0, 0, 1, 1, 1]), 2));
-    g.setIndex([0, 1, 2, 2, 1, 3]);
-    const alvo = new Float32Array(n * 3);
-    const atraso = new Float32Array(n);
-    const giro = new Float32Array(n * 4);
-    const r0 = 0.16;
-    const r1 = 0.95;
-    for (let i = 0; i < n; i++) {
-      const t = (i + 0.5) / n;
-      const rr = Math.sqrt(r0 * r0 + t * (r1 * r1 - r0 * r0)) * R;
-      const phi = modPositivo(i * 2.399963229728653 + (rnd() - 0.5) * 0.08, TAU);
-      alvo.set([Math.sin(phi) * rr, Math.cos(phi) * rr, 0.02 + rnd() * 0.012], i * 3);
-      // pouso escalonado: varredura horária a partir das 12h + acaso
-      atraso[i] = 0.04 + 0.22 * rnd() + 0.12 * (phi / TAU);
-      const th = rnd() * TAU;
-      const z = rnd() * 2 - 1;
-      const s = Math.sqrt(1 - z * z);
-      const voltas = (rnd() < 0.5 ? -1 : 1) * Math.PI * (1.5 + rnd() * 2.5);
-      giro.set([s * Math.cos(th), s * Math.sin(th), z, voltas], i * 4);
-    }
-    g.setAttribute("aAlvo", new InstancedBufferAttribute(alvo, 3));
-    g.setAttribute("aAtraso", new InstancedBufferAttribute(atraso, 1));
-    g.setAttribute("aGiro", new InstancedBufferAttribute(giro, 4));
-    g.setAttribute("aOrigem", new InstancedBufferAttribute(new Float32Array(n * 3), 3));
-    g.setAttribute("aCor", new InstancedBufferAttribute(new Float32Array(n * 3), 3));
-    g.setAttribute("aArco", new InstancedBufferAttribute(new Float32Array(n), 1));
-    g.instanceCount = n;
-    this.descartaveis.push(g);
-    const malha = new Mesh(g, this.matFolhas);
+  /** Estrela viajante: 1 quad aditivo, sem teste de profundidade, desenhado por último. */
+  private criarEstrelaViajante(): Mesh {
+    const halo = texturaHaloEstrela();
+    const raios = texturaRaios();
+    this.uEstrela.uHalo.value = halo;
+    this.uEstrela.uRaios.value = raios;
+    const m = new ShaderMaterial({
+      uniforms: this.uEstrela,
+      vertexShader: VERT_UV,
+      fragmentShader: FRAG_ESTRELA,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: AdditiveBlending,
+    });
+    this.descartaveis.push(halo, raios);
+    const malha = new Mesh(new PlaneGeometry(1, 1), m);
     malha.frustumCulled = false;
-    malha.renderOrder = 1; // depois da face, testando profundidade contra ela
+    malha.renderOrder = 3;
     return malha;
   }
 
-  /**
-   * Preenche origem (grade sobre o retângulo central onde estava o painel de CPF, desprojetada
-   * para um plano entre a câmera e a roleta, no espaço da câmera, já com o setViewOffset) e a
-   * cor da fatia sob cada alvo. Roda uma vez por chegada, nunca por quadro.
-   */
-  private prepararFolhas(): void {
-    const n = this.nFolhas;
-    const rnd = this.rndFolhas;
-    const W = window.innerWidth;
-    const H = window.innerHeight;
-    const rw = Math.min(W * 0.9, Math.max(300, W * 0.34));
-    const rh = Math.min(H * 0.9, Math.max(380, H * 0.6));
-    const celH = Math.sqrt((rw * rh) / (1.5 * n));
-    const celW = celH * 1.5;
-    const cols = Math.max(1, Math.round(rw / celW));
-    const linhas = Math.ceil(n / cols);
-    const x0 = W / 2 - ((cols - 1) * celW) / 2;
-    const y0 = H / 2 - ((linhas - 1) * celH) / 2;
-    const d = this.distBase * 0.55;
-    const pxParaVista = (2 * d * Math.tan(((FOV / 2) * Math.PI) / 180)) / H;
-    this.matFolhas.uniforms.uEscalaOrigem.value = (celW * 0.9 * pxParaVista) / this.larguraFolha;
-
-    // centro do painel -> centro do disco, bordas do painel -> aro
-    for (let k = 0; k < n; k++) {
-      const dx = ((k % cols) - (cols - 1) / 2) / cols;
-      const dy = (Math.floor(k / cols) - (linhas - 1) / 2) / linhas;
-      this.chaveFolhas[k] = dx * dx + dy * dy + rnd() * 0.01;
-      this.ordemFolhas[k] = k;
-    }
-    const chave = this.chaveFolhas;
-    this.ordemFolhas.sort((a, b) => chave[a] - chave[b]);
-
-    const g = this.folhas.geometry;
-    const origem = g.getAttribute("aOrigem") as InstancedBufferAttribute;
-    const cor = g.getAttribute("aCor") as InstancedBufferAttribute;
-    const arco = g.getAttribute("aArco") as InstancedBufferAttribute;
-    const alvo = g.getAttribute("aAlvo") as InstancedBufferAttribute;
-    const nf = this.fatias.length;
-    const v = this.vTmp;
+  /** Rastro: n pontos ao longo da curva → faixa de 2n vértices atualizada na CPU (1 draw call). */
+  private criarRastro(n: number): Mesh {
+    const pos = new Float32Array(n * 2 * 3);
+    const ao = new Float32Array(n * 2);
+    const lado = new Float32Array(n * 2);
     for (let i = 0; i < n; i++) {
-      const k = this.ordemFolhas[i];
-      const sx = x0 + (k % cols) * celW + (rnd() - 0.5) * celW * 0.12;
-      const sy = y0 + Math.floor(k / cols) * celH + (rnd() - 0.5) * celH * 0.12;
-      v.set((sx / W) * 2 - 1, -(sy / H) * 2 + 1, 0.5).applyMatrix4(this.camera.projectionMatrixInverse);
-      v.multiplyScalar((d * (0.94 + rnd() * 0.12)) / -v.z);
-      origem.setXYZ(i, v.x, v.y, v.z);
-      arco.setX(i, (0.05 + rnd() * 0.17) * this.distBase);
-
-      const ax = alvo.getX(i);
-      const ay = alvo.getY(i);
-      const rr = Math.sqrt(ax * ax + ay * ay) / R;
-      if (nf) {
-        const f = this.fatias[fatiaSobPonteiro(this.fatias, -modPositivo(Math.atan2(ax, ay), TAU))] ?? this.fatias[0];
-        const j = f.indice;
-        this.corTmp.set(corBaseFatia(j, nf)).lerp(this.corTmp2.set(corLuz(j, nf)), 0.2 + 0.55 * rr * rr);
-      } else {
-        this.corTmp.set(PALETA.azulClaro);
+      for (let k = 0; k < 2; k++) {
+        ao[i * 2 + k] = i / (n - 1);
+        lado[i * 2 + k] = k === 0 ? -1 : 1;
       }
-      this.corTmp.multiplyScalar(0.9 + rnd() * 0.25).convertLinearToSRGB();
-      cor.setXYZ(i, this.corTmp.r, this.corTmp.g, this.corTmp.b);
     }
-    origem.needsUpdate = true;
-    cor.needsUpdate = true;
-    arco.needsUpdate = true;
+    const indices: number[] = [];
+    for (let i = 0; i < n - 1; i++) {
+      const a = i * 2;
+      indices.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+    const g = new BufferGeometry();
+    const attr = new BufferAttribute(pos, 3);
+    attr.setUsage(DynamicDrawUsage);
+    g.setAttribute("position", attr);
+    g.setAttribute("aAo", new BufferAttribute(ao, 1));
+    g.setAttribute("aLado", new BufferAttribute(lado, 1));
+    g.setIndex(indices);
+    const m = new ShaderMaterial({
+      uniforms: this.uRastro,
+      vertexShader: VERT_RASTRO,
+      fragmentShader: FRAG_RASTRO,
+      transparent: true,
+      depthWrite: false,
+      blending: AdditiveBlending,
+      side: DoubleSide,
+    });
+    const malha = new Mesh(g, m);
+    malha.frustumCulled = false;
+    malha.renderOrder = 2;
+    return malha;
+  }
+
+  /** Riscos de hiperespaço: n segmentos num cubo que acompanha a câmera (1 draw call). */
+  private criarWarp(n: number): LineSegments {
+    const rnd = gerador(53);
+    const pos = new Float32Array(n * 2 * 3);
+    const ponta = new Float32Array(n * 2);
+    const cor = new Float32Array(n * 2 * 3);
+    const c = new Color();
+    for (let i = 0; i < n; i++) {
+      const x = (rnd() - 0.5) * CAIXA_WARP;
+      const y = (rnd() - 0.5) * CAIXA_WARP;
+      const z = (rnd() - 0.5) * CAIXA_WARP;
+      const r = rnd();
+      c.set(r < 0.55 ? "#ffffff" : r < 0.8 ? "#a9c8ff" : r < 0.92 ? "#ffd59a" : LUZES[Math.floor(rnd() * LUZES.length)]);
+      c.multiplyScalar(0.55 + rnd() * 0.45);
+      for (let k = 0; k < 2; k++) {
+        const j = i * 2 + k;
+        pos.set([x, y, z], j * 3);
+        ponta[j] = k;
+        cor.set([c.r, c.g, c.b], j * 3);
+      }
+    }
+    const g = new BufferGeometry();
+    g.setAttribute("position", new BufferAttribute(pos, 3));
+    g.setAttribute("aPonta", new BufferAttribute(ponta, 1));
+    g.setAttribute("aCor", new BufferAttribute(cor, 3));
+    const m = new ShaderMaterial({
+      uniforms: this.uWarp,
+      vertexShader: VERT_WARP,
+      fragmentShader: FRAG_WARP,
+      transparent: true,
+      depthWrite: false,
+      blending: AdditiveBlending,
+    });
+    const linhas = new LineSegments(g, m);
+    linhas.frustumCulled = false;
+    linhas.renderOrder = 1;
+    return linhas;
+  }
+
+  /**
+   * Constelações que acendem na viagem: linhas (nó→nó do grupo e estrela→nó; a ponta da
+   * estrela vem de um uniform) e os nós com brilho extra. 2 draw calls, só quando acesas.
+   */
+  private criarLigacoes(): void {
+    const pos: number[] = [];
+    const ponta: number[] = [];
+    const grupo: number[] = [];
+    const tipo: number[] = [];
+    const posNos: number[] = [];
+    const grupoNos: number[] = [];
+    const tamNos: number[] = [];
+    this.gruposConst.forEach((g, gi) => {
+      g.nos.forEach((no, k) => {
+        posNos.push(no.x, no.y, no.z);
+        grupoNos.push(gi);
+        tamNos.push(0.3 + (k % 3) * 0.1);
+        pos.push(no.x, no.y, no.z, no.x, no.y, no.z);
+        ponta.push(0, 1);
+        grupo.push(gi, gi);
+        tipo.push(1, 1);
+        if (k > 0) {
+          const a = g.nos[k - 1];
+          pos.push(a.x, a.y, a.z, no.x, no.y, no.z);
+          ponta.push(0, 0);
+          grupo.push(gi, gi);
+          tipo.push(0, 0);
+        }
+      });
+    });
+    const gl = new BufferGeometry();
+    gl.setAttribute("position", new BufferAttribute(new Float32Array(pos), 3));
+    gl.setAttribute("aPonta", new BufferAttribute(new Float32Array(ponta), 1));
+    gl.setAttribute("aGrupo", new BufferAttribute(new Float32Array(grupo), 1));
+    gl.setAttribute("aTipo", new BufferAttribute(new Float32Array(tipo), 1));
+    const ml = new ShaderMaterial({
+      uniforms: { uEstrela: this.uEstrelaPos, uAceso: { value: this.aceso }, uTempo: this.uniformesComuns.uTempo, uMestre: this.uMestre },
+      vertexShader: VERT_LIGACOES,
+      fragmentShader: FRAG_LIGACOES,
+      transparent: true,
+      depthWrite: false,
+      blending: AdditiveBlending,
+    });
+    this.ligacoes = new LineSegments(gl, ml);
+    this.ligacoes.frustumCulled = false;
+    this.ligacoes.renderOrder = 1;
+    this.cena.add(this.ligacoes);
+
+    const gn = new BufferGeometry();
+    gn.setAttribute("position", new BufferAttribute(new Float32Array(posNos), 3));
+    gn.setAttribute("aGrupo", new BufferAttribute(new Float32Array(grupoNos), 1));
+    gn.setAttribute("aTam", new BufferAttribute(new Float32Array(tamNos), 1));
+    const mn = new ShaderMaterial({
+      uniforms: { uAceso: { value: this.aceso }, uEscala: this.uniformesComuns.uEscala, uMestre: this.uMestre },
+      vertexShader: VERT_NOS,
+      fragmentShader: FRAG_NOS,
+      transparent: true,
+      depthWrite: false,
+      blending: AdditiveBlending,
+    });
+    this.nosAcesos = new Points(gn, mn);
+    this.nosAcesos.frustumCulled = false;
+    this.nosAcesos.renderOrder = 1;
+    this.cena.add(this.nosAcesos);
+  }
+
+  /**
+   * Onda de choque + arco do aro: um disco no plano da roleta (1 draw call). Disco em vez de
+   * quad (sem os cantos) e descarte cedo no shader; no modo leve, sem a cruz da cabeça do arco.
+   */
+  private criarAnel(): Mesh {
+    const m = new ShaderMaterial({
+      uniforms: this.uAnel,
+      defines: { COM_CRUZ: this.leve ? 0 : 1, ALCANCE_ARO: this.leve ? "0.3" : "0.45" },
+      vertexShader: VERT_ANEL,
+      fragmentShader: FRAG_ANEL,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+      blending: AdditiveBlending,
+      side: DoubleSide,
+    });
+    // raio 1 (escalado por uRaioQuad, como o quad 2×2 de antes): vP continua = position.xy · raio
+    const malha = new Mesh(new CircleGeometry(1, 64), m);
+    malha.position.z = 0.04;
+    malha.frustumCulled = false;
+    malha.renderOrder = 2;
+    return malha;
   }
 
   // ---------- API ----------
@@ -939,23 +1419,24 @@ export class Cena {
       this.redesenharFace();
     }
     this.pinos.count = Math.min(fatias.length > 1 ? fatias.length : 0, MAX_PINOS);
-    this.posicionarPinos(this.modoRevelacao === "chegando" ? this.revelacao : 1);
+    this.posicionarPinos();
   }
 
   definirFase(fase: Fase): void {
     const anterior = this.fase;
     const comRoleta = FASES_COM_ROLETA.has(fase);
     if (comRoleta && (this.modoRevelacao === "oculta" || this.modoRevelacao === "saindo")) {
-      // cena que já nasce com roleta (recarga em "resultado", troca 2D/3D): sem animação
-      if (this.primeiraFase || anterior === "carregando") this.mostrarDireto();
-      else this.iniciarChegada();
+      // só a entrada em "pronto" vinda de uma fase sem roleta (CPF confirmado) faz a viagem;
+      // cena que já nasce com roleta (recarga, troca 2D/3D) ou fase com roleta recuperada
+      // ("resultado" depois de outraJanela/importação): roleta direto, sem animação
+      const viaja = !this.primeiraFase && anterior !== "carregando" && fase === "pronto" && !FASES_COM_ROLETA.has(anterior);
+      if (viaja) this.iniciarChegada();
+      else this.mostrarDireto();
     } else if (!comRoleta && (this.modoRevelacao === "chegando" || this.modoRevelacao === "visivel")) {
       this.iniciarSaida();
     }
     // o giro começou no meio da chegada: termina rápido, com o ponteiro já no lugar
-    if (fase === "girando" && this.modoRevelacao === "chegando") {
-      this.fatorChegada = Math.max(this.fatorChegada, (this.durChegada - this.tRevelacao) / DUR_APRESSADA);
-    }
+    if (fase === "girando" && this.modoRevelacao === "chegando") this.acelerarChegada(DUR_APRESSADA);
     this.primeiraFase = false;
 
     if (fase === "resultado" && this.fase !== "resultado") {
@@ -988,6 +1469,12 @@ export class Cena {
     this.descartaveis.forEach((d) => d.dispose());
     this.texturaFace.dispose();
     this.renderer.dispose();
+    // dispose() não libera o contexto: sem isto cada troca 2D/3D deixa um contexto vivo até o GC
+    try {
+      this.renderer.forceContextLoss();
+    } catch {
+      /* contexto já perdido ou extensão indisponível */
+    }
     this.renderer.domElement.remove();
   }
 
@@ -1029,8 +1516,12 @@ export class Cena {
     this.parallax.ay = (e.clientY / window.innerHeight - 0.5) * 2;
   };
 
-  /** Tocar o céu (fora da roleta e do painel) solta faíscas. */
+  /** Tocar a tela durante a chegada acelera o resto; fora dela, tocar o céu solta faíscas. */
   private tocarFundo = (e: PointerEvent) => {
+    if (this.modoRevelacao === "chegando") {
+      if (performance.now() - this.inicioChegada > IGNORA_TOQUE_MS) this.acelerarChegada(DUR_PULO);
+      return;
+    }
     const alvo = e.target as HTMLElement | null;
     if (alvo?.closest("section, button, aside, [data-roleta], [data-ui], [role=dialog]")) return;
     const v = new Vector3((e.clientX / window.innerWidth) * 2 - 1, -(e.clientY / window.innerHeight) * 2 + 1, 0.5);
@@ -1054,51 +1545,153 @@ export class Cena {
   private iniciarChegada() {
     this.modoRevelacao = "chegando";
     this.tRevelacao = 0;
+    this.tau = 0;
+    this.dtRoteiro = 0;
     this.revelacao = 0;
     this.fatorChegada = 1;
-    this.folhasPendentes = true;
-    this.matFolhas.uniforms.uProg.value = 0;
-    this.matFolhas.uniforms.uAlfa.value = 0;
+    this.inicioChegada = performance.now();
+    this.viagemPendente = true;
+    this.sViagem = 0;
+    this.velViagem = 0;
+    this.supernovaEmitida = false;
+    this.pinoEmitido.fill(0);
+    this.arcoPinos = 0;
+    this.aceso.fill(0);
+    for (const g of this.gruposConst) g.memoria = 0;
+    this.uMestre.value = 1;
+    this.mestreChegada = 1;
+    this.perseguicaoSolta = false;
+    this.apagarRestante = 0;
+    this.apagarTotal = 0;
+    this.durRetomada = 0;
+    this.saltouRoteiro = false;
+  }
+
+  /** Velocidade atual da estrela no roteiro, em fração da curva por segundo real. */
+  private velCurvaReal(): number {
+    return ((this.velViagem * VMAX) / (T_POUSO - T_PARTIDA)) * (T_FIM / this.durChegada) * this.fatorChegada;
+  }
+
+  /** A câmera deixa de seguir o roteiro: a pose de perseguição continua pela curva e freia. */
+  private soltarPerseguicao() {
+    if (this.perseguicaoSolta) return;
+    this.perseguicaoSolta = true;
+    this.sPerseg = this.sViagem;
+    this.velPerseg = this.modoRevelacao === "chegando" ? this.velCurvaReal() : 0;
+  }
+
+  private avancarPerseguicaoSolta(dt: number) {
+    this.sPerseg = Math.min(1, this.sPerseg + this.velPerseg * dt);
+    this.velPerseg *= Math.exp(-dt * K_FREIO_PERSEG);
+  }
+
+  /**
+   * Pulo (toque) ou giro no meio da chegada: o que falta termina em ~`dur` segundos SEM
+   * comprimir a perseguição. Com a viagem em curso, ela se apaga onde está (o roteiro para)
+   * enquanto a câmera sai da perseguição em tempo real; o roteiro então salta para perto do
+   * pouso e a supernova e a formação seguem com fator moderado. Perto do pouso, só acelera.
+   */
+  private acelerarChegada(dur: number) {
+    this.soltarPerseguicao();
+    if (this.apagarRestante > 0) {
+      // já se apagando (giro depois de um toque): só encurta o que falta
+      // (mantém o brilho atual: restante/total não muda no quadro do ajuste)
+      const apagar = Math.min(this.apagarRestante, dur * 0.3);
+      this.durRetomada = Math.min(this.durRetomada, dur - apagar);
+      this.apagarTotal = (this.apagarTotal * apagar) / this.apagarRestante;
+      this.apagarRestante = apagar;
+      return;
+    }
+    if (this.tau < T_RETOMA && !this.saltouRoteiro) {
+      this.apagarTotal = this.apagarRestante = Math.min(DUR_APAGAR_PULO, dur * 0.3);
+      this.durRetomada = dur - this.apagarTotal;
+      return;
+    }
+    this.fatorChegada = Math.max(this.fatorChegada, (this.durChegada - this.tRevelacao) / dur);
   }
 
   private iniciarSaida() {
+    this.soltarPerseguicao();
     this.rSaida = Math.max(0.05, this.revelacao);
     this.modoRevelacao = "saindo";
     this.tRevelacao = 0;
     // roleta que mal começou a se formar não solta o anel de faíscas
     this.brilhoSaidaEmitido = this.revelacao < 0.5;
-    this.folhasPendentes = false;
+    this.viagemPendente = false;
+    this.apagarRestante = 0;
   }
 
   private mostrarDireto() {
     const primeiraChegada = this.modoRevelacao === "chegando";
+    // a câmera termina de sair da perseguição sozinha (sem salto), já fora da chegada
+    if (this.pesoPerseguicao > 0.0005) this.soltarPerseguicao();
     this.modoRevelacao = "visivel";
     this.revelacao = 1;
+    this.apagarRestante = 0;
     this.aplicarVisivel();
     // a avaliação inicial mediu a cena sem roleta: refaz com a roleta montada
     if (primeiraChegada && !this.reavaliado) {
       this.reavaliado = true;
       this.avaliado = false;
-      this.amostrasQuadro = [];
+      this.nAmostras = 0;
       this.janelaInicio = 0;
     }
+    // a interface mostra o painel (botão Girar) quando a roleta está inteira; em microtarefa
+    // para que ouvintes registrados nos efeitos do mesmo commit do React já existam
+    queueMicrotask(() => {
+      if (!this.destruido && this.modoRevelacao === "visivel") window.dispatchEvent(new CustomEvent(EVENTO_CHEGADA));
+    });
   }
 
-  /** Avança o relógio da revelação (antes da câmera, que usa o afastamento). */
+  /** Avança o relógio da revelação (antes da câmera, que usa o peso da perseguição). */
   private avancarRevelacao(dt: number) {
+    const saidaPerseg = Math.exp(-dt * K_SAIDA_PERSEG);
     if (this.modoRevelacao === "chegando") {
-      this.tRevelacao += dt * this.fatorChegada;
+      if (this.apagarRestante > 0) {
+        // pulo: o roteiro para; a estrela segue com a câmera, freando, e a viagem se apaga
+        this.apagarRestante = Math.max(0, this.apagarRestante - dt);
+        this.mestreChegada = this.apagarTotal > 0 ? this.apagarRestante / this.apagarTotal : 0;
+        this.avancarPerseguicaoSolta(dt);
+        this.sViagem = this.sPerseg;
+        this.velViagem *= Math.exp(-dt * K_FREIO_PERSEG);
+        this.dtRoteiro = 0;
+        this.pesoPerseguicao *= saidaPerseg;
+        if (this.apagarRestante <= 0) {
+          // salta para perto do pouso (com tudo apagado); supernova e formação com fator moderado
+          this.saltouRoteiro = true;
+          this.tau = T_RETOMA;
+          this.tRevelacao = (T_RETOMA / T_FIM) * this.durChegada;
+          this.fatorChegada = ((T_FIM - T_RETOMA) / T_FIM) * this.durChegada / Math.max(0.05, this.durRetomada);
+          this.revelacao = faixa(this.tau, T_POUSO, T_FIM);
+          this.perfilViagem(faixa(this.tau, T_PARTIDA, T_POUSO));
+        }
+        return;
+      }
+      const dtR = dt * this.fatorChegada;
+      this.tRevelacao += dtR;
       const u = Math.min(1, this.tRevelacao / this.durChegada);
-      this.revelacao = u;
-      // a câmera recua rápido enquanto o painel se desfaz (o céu ganha profundidade, sem
-      // salto) e depois mergulha até o enquadramento final
-      const recuo = 0.14;
-      this.afastamento =
-        u < recuo ? Math.max(this.afastamento, 1 - (1 - u / recuo) ** 3) : 1 - inOutCubic(faixa(u, recuo, 0.95));
+      this.tau = u * T_FIM;
+      this.dtRoteiro = dtR * (T_FIM / this.durChegada);
+      this.revelacao = faixa(this.tau, T_POUSO, T_FIM);
+      this.perfilViagem(faixa(this.tau, T_PARTIDA, T_POUSO));
+      if (this.perseguicaoSolta) {
+        // pulo/giro: a câmera sai da perseguição em tempo real, por uma pose que freia sozinha
+        this.pesoPerseguicao *= saidaPerseg;
+        this.avancarPerseguicaoSolta(dt);
+      } else {
+        // câmera: enquadramento → perseguição (decolagem) → enquadramento (chegada); a queda
+        // nunca é mais rápida que exp(-dt·K) em tempo real
+        const roteiro = suave(this.tau, 0.75, 1.9) * (1 - suave(this.tau, 5.35, 6.75));
+        this.pesoPerseguicao = roteiro < this.pesoPerseguicao ? Math.max(roteiro, this.pesoPerseguicao * saidaPerseg) : roteiro;
+        this.sPerseg = this.sViagem;
+      }
+      // depois do salto, a estrela reacende no pouso
+      this.mestreChegada = this.saltouRoteiro ? Math.min(1, this.mestreChegada + dt / 0.08) : 1;
       if (u >= 1) this.mostrarDireto();
       return;
     }
-    this.afastamento *= Math.exp(-dt * 5);
+    this.pesoPerseguicao *= saidaPerseg;
+    if (this.pesoPerseguicao > 0.0005) this.avancarPerseguicaoSolta(dt);
     if (this.modoRevelacao === "saindo") {
       this.tRevelacao += dt;
       const u = Math.min(1, this.tRevelacao / DUR_SAIDA);
@@ -1111,14 +1704,99 @@ export class Cena {
     }
   }
 
-  /** Aplica o estado do quadro às peças (depois da câmera: as folhas desprojetam com ela). */
+  /** Posição (0..1, por comprimento de arco) e velocidade normalizada: trapézio acelera/cruza/freia. */
+  private perfilViagem(k: number) {
+    if (k < ACEL) {
+      this.sViagem = (VMAX * k * k) / (2 * ACEL);
+      this.velViagem = k / ACEL;
+    } else if (k < 1 - FREIO) {
+      this.sViagem = VMAX * (ACEL / 2 + k - ACEL);
+      this.velViagem = 1;
+    } else {
+      const r = 1 - k;
+      this.sViagem = 1 - (VMAX * r * r) / (2 * FREIO);
+      this.velViagem = r / FREIO;
+    }
+    this.sViagem = saturar(this.sViagem);
+  }
+
+  /**
+   * Monta a rota desta chegada (uma vez, com a câmera já posicionada): nasce no centro da tela,
+   * passa pelos pontos fixos e termina na estrela do cubo com a inclinação final. Escolhe as
+   * constelações que a rota mais se aproxima para acenderem.
+   */
+  private prepararViagem() {
+    const cam = this.camera;
+    cam.updateMatrixWorld();
+    const dir = this.vB.set(0, 0, 0.5).unproject(cam).sub(cam.position).normalize();
+    const p = this.pontosCurva;
+    p[0].copy(cam.position).addScaledVector(dir, this.distBase * 0.45);
+    p[1].copy(p[0]).addScaledVector(dir, 3.6);
+    p[1].x -= 0.7;
+    p[1].y += 0.3;
+    ROTA.forEach(([x, y, z], i) => p[i + 2].set(x, y, z));
+    const zCentro = 0.085; // estrelaCentral.position.z
+    p[p.length - 1].set(0, -Math.sin(INCLINACAO_ATIVA) * zCentro, Math.cos(INCLINACAO_ATIVA) * zCentro);
+    this.curva.updateArcLengths();
+    this.compCurva = this.curva.getLength();
+    this.velCruzeiro = (VMAX * this.compCurva) / (T_POUSO - T_PARTIDA);
+
+    for (const g of this.gruposConst) g.dMin = Infinity;
+    const amostras = 120;
+    for (let i = 0; i < amostras; i++) {
+      this.curva.getPointAt(i / (amostras - 1), this.vA);
+      for (const g of this.gruposConst) g.dMin = Math.min(g.dMin, this.vA.distanceTo(g.centro));
+    }
+    const ordem = this.gruposConst.map((g) => g.dMin).sort((a, b) => a - b);
+    const limite = ordem[Math.min(GRUPOS_ACESOS, ordem.length) - 1];
+    for (const g of this.gruposConst) g.ativo = g.dMin <= limite;
+  }
+
+  /** Tangente da curva em u, por diferença central (sem alocar, ao contrário de getTangentAt). */
+  private tangenteEm(u: number, alvo: Vector3): Vector3 {
+    const u1 = Math.max(0, u - 0.002);
+    const u2 = Math.min(1, u + 0.002);
+    this.curva.getPointAt(u1, this.vT1);
+    this.curva.getPointAt(u2, alvo);
+    return alvo.sub(this.vT1).normalize();
+  }
+
+  /**
+   * Pose da câmera de perseguição (posPerseg, alvoPerseg, rolagemPerseg): atrás da estrela na
+   * própria curva, de lado, com rolagem. Em retrato (aspect < 1) o meio campo horizontal é
+   * estreito: o avanço do alvo e o deslocamento lateral encolhem com o aspect para a estrela
+   * não sair do quadro nas curvas fechadas.
+   */
+  private calcularPerseguicao() {
+    const L = this.compCurva;
+    const s = this.sPerseg;
+    const kAsp = Math.min(1, this.camera.aspect / 1.2);
+    const dCam = s * L - D_ATRAS;
+    const uCam = Math.max(0, dCam) / L;
+    this.curva.getPointAt(uCam, this.vBase);
+    this.tangenteEm(uCam, this.vTanCam);
+    if (dCam < 0) this.vBase.addScaledVector(this.vTanCam, dCam);
+    this.curva.getPointAt(s, this.alvoPerseg);
+    this.tangenteEm(s, this.vB);
+    const lado = this.vLado.crossVectors(this.vTanCam, EIXO_Y);
+    if (lado.lengthSq() < 1e-6) lado.set(1, 0, 0);
+    else lado.normalize();
+    const cima = this.vCima.crossVectors(lado, this.vTanCam);
+    this.posPerseg.copy(this.vBase).addScaledVector(lado, 0.42 * kAsp).addScaledVector(cima, 0.3);
+    // quanto a direção da estrela já virou para o lado: inclina para dentro da curva
+    const curvaLado = this.vA.copy(this.vB).sub(this.vTanCam).dot(lado);
+    this.alvoPerseg.addScaledVector(this.vB, 0.8 * kAsp);
+    this.rolagemPerseg = Math.max(-0.35, Math.min(0.35, curvaLado * 0.6));
+  }
+
+  /** Aplica o estado do quadro às peças (depois da câmera: rastro e estrela usam a pose dela). */
   private aplicarRevelacao(dt: number) {
     if (this.modoRevelacao === "chegando") {
-      if (this.folhasPendentes) {
-        this.prepararFolhas();
-        this.folhasPendentes = false;
+      if (this.viagemPendente) {
+        this.prepararViagem();
+        this.viagemPendente = false;
       }
-      this.aplicarChegada(this.revelacao);
+      this.aplicarChegada();
     } else if (this.modoRevelacao === "saindo") {
       this.aplicarSaida(Math.min(1, this.tRevelacao / DUR_SAIDA), dt);
     }
@@ -1130,14 +1808,29 @@ export class Cena {
     obj.position.z = z0 * s;
   }
 
-  /** Pinos surgem um a um, no sentido horário a partir das 12h. */
-  private posicionarPinos(u: number) {
+  /**
+   * Pinos: na chegada surgem um a um, no sentido horário, quando o arco de luz passa por eles
+   * (cada um solta um brilho de estrela); fora dela, todos no lugar.
+   */
+  private posicionarPinos() {
     const n = this.pinos.count;
     const m = this.matrizPino;
+    const arco = this.arcoPinos;
+    const emitir = this.modoRevelacao === "chegando";
     for (let i = 0; i < n; i++) {
       const phi = this.fatias[i].inicio;
-      const ini = 0.64 + 0.2 * (i / n);
-      const s = u >= 1 ? 1 : Math.max(0, outBack(faixa(u, ini, ini + 0.12)));
+      let s = 1;
+      if (arco < TAU + 1) {
+        // ângulo do pino visto pela câmera (horário desde as 12h), com a rotação atual
+        const k = faixa(arco - modPositivo(phi + this.thetaAtual, TAU), 0, 0.55);
+        s = k <= 0 ? 0 : outBack(k);
+        if (emitir && k > 0 && !this.pinoEmitido[i]) {
+          this.pinoEmitido[i] = 1;
+          this.vA.set(Math.sin(phi) * R * 0.975, Math.cos(phi) * R * 0.975, 0.05);
+          this.disco.localToWorld(this.vA);
+          this.emitirFaiscas(this.vA, this.leve ? 2 : 3, 0.5, false);
+        }
+      }
       m.makeScale(s, s, s);
       m.setPosition(Math.sin(phi) * R * 0.975, Math.cos(phi) * R * 0.975, 0.03);
       this.pinos.setMatrixAt(i, m);
@@ -1145,61 +1838,250 @@ export class Cena {
     this.pinos.instanceMatrix.needsUpdate = true;
   }
 
-  private aplicarChegada(u: number) {
+  /** Solta faíscas do pool: em anel no plano do disco (supernova) ou em todas as direções. */
+  private emitirFaiscas(origem: Vector3, total: number, vel: number, noDisco: boolean) {
+    let k = 0;
+    for (const f of this.poolFaiscas) {
+      if (f.vida > 0) continue;
+      f.vida = 1;
+      f.pos.copy(origem);
+      const v = vel * (0.5 + Math.random() * 0.8); // cosmético
+      if (noDisco) {
+        const a = (k / total) * TAU + Math.random() * 0.15;
+        f.vel.set(Math.sin(a) * v, Math.cos(a) * v, (Math.random() - 0.5) * 0.4).applyQuaternion(this.inclinacao.quaternion);
+      } else {
+        const a = Math.random() * TAU;
+        const z = Math.random() * 2 - 1;
+        const sz = Math.sqrt(1 - z * z);
+        f.vel.set(Math.cos(a) * sz * v, Math.sin(a) * sz * v, z * v);
+      }
+      if (++k >= total) break;
+    }
+  }
+
+  /** Um quadro da chegada: estrela, rastro, riscos, constelações e formação da roleta. */
+  private aplicarChegada() {
+    const tau = this.tau;
+    const s = this.sViagem;
+    this.curva.getPointAt(s, this.vEstrela);
+    this.tangenteEm(s, this.vTanEstrela);
+    this.uMestre.value = this.mestreChegada;
+    const vel = this.velViagem * this.velCruzeiro; // mundo por segundo do roteiro
+    this.aplicarEstrela(tau);
+    this.aplicarRastro(s * this.compCurva, vel);
+    this.aplicarWarp(tau, vel);
+    this.aplicarLigacoes(tau);
+    this.aplicarFormacao(tau);
+  }
+
+  private aplicarEstrela(tau: number) {
+    const e = this.estrelaViajante;
+    const cam = this.camera;
+    const kNasc = faixa(tau, 0, 0.7);
+    const nasc = kNasc <= 0 ? 0 : outBack(kNasc);
+    const chegada = suave(tau, 5.6, 6.5);
+    const pulso = 1 + (0.06 + 0.14 * chegada) * Math.sin(tau * TAU * 2.2);
+    const dp = tau - T_POUSO;
+    const flash = dp < 0 ? Math.exp(-((dp / 0.06) ** 2)) : Math.exp(-dp / 0.16);
+    // tamanho em fração da altura da tela (constante durante a viagem), depois em mundo: a
+    // estrela encolhe até o tamanho da estrela do cubo, no mesmo ponto. O flash cresce pouco o
+    // quad (no máximo ~0,6 da altura da tela, não a tela inteira): o pico vem do brilho
+    const dist = Math.max(0.3, this.vA.copy(this.vEstrela).sub(cam.position).length());
+    let tamanho = ((0.24 + 0.12 * chegada) * nasc * pulso + 0.22 * flash) * 2 * TAN_MEIO_FOV * dist;
+    tamanho += (0.42 - tamanho) * suave(tau, 6.75, 7.55);
+    const brilho = Math.min(1, kNasc * 4) * (1 + 2.8 * flash) * (0.92 + 0.5 * (pulso - 1)) * (1 - suave(tau, 7.3, 7.85));
+    e.visible = brilho * this.mestreChegada > 0.002;
+    e.position.copy(this.vEstrela);
+    e.quaternion.copy(cam.quaternion);
+    e.scale.setScalar(Math.max(1e-4, tamanho));
+    const u = this.uEstrela;
+    u.uGiro.value = 0.25 * tau + 0.6 * flash;
+    u.uBrilho.value = brilho;
+    u.uRaiosForca.value = 0.85 + 0.8 * flash;
+  }
+
+  /** Rastro sobre a curva, atrás da estrela; comprimento proporcional à velocidade. */
+  private aplicarRastro(dEstrela: number, vel: number) {
+    const r = this.rastro;
+    const comp = Math.min(this.leve ? 2.6 : 4.6, vel * (this.leve ? 0.24 : 0.4));
+    // depois do salto do pulo o rastro não reaparece (a estrela reacende já no pouso)
+    if (comp < 0.03 || this.saltouRoteiro || this.mestreChegada < 0.002) {
+      r.visible = false;
+      return;
+    }
+    r.visible = true;
+    this.uRastro.uAlfa.value = Math.min(1, comp * 1.5);
+    const n = this.nRastro;
+    const L = this.compCurva;
+    const pts = this.pontosRastro;
+    const v = this.vA;
+    for (let j = 0; j < n; j++) {
+      const d = Math.max(0, dEstrela - (comp * j) / (n - 1));
+      this.curva.getPointAt(d / L, v);
+      pts[j * 3] = v.x;
+      pts[j * 3 + 1] = v.y;
+      pts[j * 3 + 2] = v.z;
+    }
+    const attr = r.geometry.getAttribute("position") as BufferAttribute;
+    const arr = attr.array as Float32Array;
+    const cam = this.camera.position;
+    const tan = this.vB;
+    const olhar = this.vCima;
+    const lado = this.vLadoRastro;
+    const largura = this.leve ? 0.06 : 0.07;
+    for (let j = 0; j < n; j++) {
+      const a = Math.max(0, j - 1) * 3;
+      const b = Math.min(n - 1, j + 1) * 3;
+      const o = j * 3;
+      tan.set(pts[a] - pts[b], pts[a + 1] - pts[b + 1], pts[a + 2] - pts[b + 2]);
+      olhar.set(pts[o] - cam.x, pts[o + 1] - cam.y, pts[o + 2] - cam.z);
+      this.vLado.crossVectors(tan, olhar);
+      const len = this.vLado.length();
+      if (len > 1e-7) lado.copy(this.vLado).divideScalar(len);
+      const w = largura * Math.pow(1 - j / (n - 1), 0.8);
+      const k = j * 6;
+      arr[k] = pts[o] - lado.x * w;
+      arr[k + 1] = pts[o + 1] - lado.y * w;
+      arr[k + 2] = pts[o + 2] - lado.z * w;
+      arr[k + 3] = pts[o] + lado.x * w;
+      arr[k + 4] = pts[o + 1] + lado.y * w;
+      arr[k + 5] = pts[o + 2] + lado.z * w;
+    }
+    attr.needsUpdate = true;
+  }
+
+  /** Riscos de hiperespaço em torno da câmera, esticados pela velocidade real (relógio acelerado incluso). */
+  private aplicarWarp(tau: number, vel: number) {
+    const forca = this.velViagem ** 1.5 * (1 - suave(tau, 5.6, 6.3)) * (this.leve ? 0.8 : 1);
+    if (forca * this.mestreChegada < 0.01) {
+      this.warp.visible = false;
+      return;
+    }
+    this.warp.visible = true;
+    const velReal = vel * (T_FIM / this.durChegada) * this.fatorChegada;
+    const u = this.uWarp;
+    u.uCam.value.copy(this.camera.position);
+    u.uVel.value.copy(this.vTanEstrela).multiplyScalar(velReal);
+    u.uEstica.value = Math.min(0.075, 1.8 / Math.max(velReal, 0.001));
+    u.uForca.value = forca;
+  }
+
+  /** As 3 constelações mais próximas da rota acendem quando a estrela passa por elas. */
+  private aplicarLigacoes(tau: number) {
+    const janela = suave(tau, 0.9, 1.3) * (1 - suave(tau, 5.6, 6.3));
+    let algum = false;
+    for (let i = 0; i < this.gruposConst.length; i++) {
+      const g = this.gruposConst[i];
+      if (!g.ativo || janela <= 0) {
+        g.memoria = 0;
+        this.aceso[i] = 0;
+        continue;
+      }
+      const k = 1 - faixa(this.vEstrela.distanceTo(g.centro), g.dMin + 0.2, g.dMin + 3.2);
+      g.memoria = Math.max(k * k * (3 - 2 * k), g.memoria - this.dtRoteiro * 1.2);
+      this.aceso[i] = g.memoria * janela;
+      if (this.aceso[i] > 0.002) algum = true;
+    }
+    algum = algum && this.mestreChegada > 0.002;
+    this.ligacoes.visible = algum;
+    this.nosAcesos.visible = algum;
+    this.uEstrelaPos.value.copy(this.vEstrela);
+  }
+
+  /** Supernova e roleta que se forma a partir da luz (do pouso, 6,6 s, até 8 s). */
+  private aplicarFormacao(tau: number) {
     this.inclinacao.visible = true;
     this.inclinacao.scale.setScalar(1);
-    this.halo.visible = true;
+    const dp = tau - T_POUSO;
+    const depois = dp >= 0;
 
-    // folhas: surgem no lugar do painel, voam, pousam e somem quando a face aparece
-    const uf = this.matFolhas.uniforms;
-    uf.uProg.value = u;
-    uf.uAlfa.value = suave(u, 0, 0.05) * (1 - suave(u, 0.84, 0.98));
-    uf.uSumir.value = suave(u, 0.7, 0.95);
-    this.folhas.visible = uf.uAlfa.value > 0.001;
+    // face: revelação radial de dentro para fora, com borda luminosa
+    const kFace = faixa(tau, 6.66, 7.36);
+    this.uFace.uRaio.value = 1.1 * outCubic(kFace);
+    this.uFace.uBorda.value = suave(tau, 6.62, 6.78) * (1 - suave(tau, 7.2, 7.6)) * 1.3;
+    this.uFace.uOpacidade.value = 1;
+    this.face.visible = kFace > 0;
 
-    const opFace = suave(u, 0.6, 0.88);
-    this.matFace.opacity = opFace;
-    this.face.visible = opFace > 0.001;
-
-    // estrutura cresce com outBack
-    const sAro = outBack(faixa(u, 0.5, 0.78));
-    this.escalar(this.aro, sAro, 0);
-    const sLado = outBack(faixa(u, 0.52, 0.8));
+    // estrutura: corpo com a face, aro quando a onda de choque passa por ele
+    const sLado = outBack(faixa(tau, 6.7, 7.2));
     this.escalar(this.lateral, sLado, -0.07);
     this.escalar(this.fundo, sLado, -0.14);
-    const sCubo = outBack(faixa(u, 0.62, 0.86));
+    this.escalar(this.aro, outBack(faixa(tau, 6.72, 7.1)), 0);
+    // cubo e estrela central nascem onde a estrela viajante parou
+    const sCubo = outBack(faixa(tau, 7.0, 7.45));
     this.escalar(this.cubo, sCubo, 0.04);
     this.escalar(this.anelCubo, sCubo, 0.08);
-    this.escalar(this.estrelaCentral, outBack(faixa(u, 0.7, 0.92)), 0.085);
-    this.matBrilho.opacity = suave(u, 0.78, 1);
+    this.escalar(this.estrelaCentral, outBack(faixa(tau, 7.15, 7.6)), 0.085);
+    this.matBrilho.opacity = suave(tau, 7.45, 8);
     this.brilho.visible = this.matBrilho.opacity > 0.001;
-    this.posicionarPinos(u);
+
+    // arco de luz pelo aro; os pinos surgem quando ele passa
+    this.arcoPinos = (TAU + 0.7) * inOutCubic(faixa(tau, 6.85, 7.7));
+    this.pinos.visible = this.arcoPinos > 0;
+    this.posicionarPinos();
 
     // ponteiro cai de cima e quica
-    const kp = faixa(u, 0.72, 1);
+    const kp = faixa(tau, 7.3, 7.95);
     this.ponteiro.visible = kp > 0;
     this.ponteiro.position.y = R * 1.1 + (1 - outBounce(kp)) * 1.3;
 
-    // halo acende e dá um flash curto quando as folhas viram face
-    const flash = Math.exp(-(((u - 0.8) / 0.06) ** 2));
-    this.matHalo.opacity = suave(u, 0.4, 0.85);
-    this.matHalo.color.setScalar(1 + flash * 2.2);
-    this.halo.scale.setScalar(1 + flash * 0.35);
+    // halo azul atrás da roleta acende com o flash da supernova (só na cor: escalar o quad
+    // grande junto com o flash empilhava mais uma camada aditiva do tamanho da tela)
+    const flashHalo = depois ? Math.exp(-dp / 0.3) : 0;
+    this.halo.visible = depois;
+    this.matHalo.opacity = suave(tau, T_POUSO, 7.4);
+    this.matHalo.color.setScalar(1 + 2.4 * flashHalo);
+    this.halo.scale.setScalar(1);
+
+    // onda de choque + arco do aro
+    const kOnda = faixa(tau, T_POUSO, 7.35);
+    const onda = 2.4 * outCubic(kOnda);
+    const alfaOnda = depois ? (1 - kOnda) ** 1.4 : 0;
+    const alfaArco = suave(tau, 6.82, 6.92) * (1 - suave(tau, 7.55, 7.9));
+    const ua = this.uAnel;
+    ua.uOnda.value = onda;
+    ua.uAlfaOnda.value = alfaOnda;
+    ua.uArco.value = this.arcoPinos;
+    ua.uAlfaArco.value = alfaArco;
+    // disco do anel: cobre o aro com a faixa da cabeça/cruz (ALCANCE_ARO) e cresce com a onda
+    const rMin = this.leve ? 1.32 : 1.47;
+    const raioQuad = alfaOnda > 0.002 ? Math.min(2.8, Math.max(rMin, onda + 0.45)) : rMin;
+    ua.uRaioQuad.value = raioQuad;
+    this.anel.scale.setScalar(raioQuad);
+    this.anel.visible = alfaOnda > 0.002 || alfaArco > 0.002;
+
+    if (depois && !this.supernovaEmitida) {
+      this.supernovaEmitida = true;
+      this.inclinacao.updateMatrixWorld();
+      this.vA.set(0, 0, 0.085);
+      this.inclinacao.localToWorld(this.vA);
+      this.emitirFaiscas(this.vA, this.leve ? 28 : 56, 2.2, true);
+    }
   }
 
-  /** Saída: a roleta toma impulso, encolhe e se desfaz em faíscas (sem folhas). */
+  /** Esconde tudo o que só existe durante a viagem/transformação. */
+  private esconderViagem() {
+    this.estrelaViajante.visible = false;
+    this.rastro.visible = false;
+    this.warp.visible = false;
+    this.ligacoes.visible = false;
+    this.nosAcesos.visible = false;
+    this.anel.visible = false;
+  }
+
+  /** Saída: a roleta toma impulso, encolhe e se desfaz em faíscas; a viagem (se houver) se apaga. */
   private aplicarSaida(u: number, dt: number) {
     const s = Math.max(1e-4, this.rSaida * (1 - inBack(u)));
     this.inclinacao.scale.setScalar(s);
-    this.matFace.opacity = Math.min(this.matFace.opacity, 1 - suave(u, 0.4, 0.9));
+    this.uFace.uOpacidade.value = Math.min(this.uFace.uOpacidade.value, 1 - suave(u, 0.4, 0.9));
+    this.uFace.uBorda.value = Math.max(0, this.uFace.uBorda.value - dt * 4);
     this.matBrilho.opacity = Math.min(this.matBrilho.opacity, 1 - suave(u, 0.15, 0.5));
     const flash = Math.exp(-(((u - 0.55) / 0.12) ** 2));
     this.matHalo.opacity = Math.min(1, this.rSaida * 1.5) * (1 - suave(u, 0.6, 1));
     this.matHalo.color.setScalar(1 + flash * 2.5);
     this.halo.scale.setScalar(Math.max(1e-4, s * (1 + flash * 0.4)));
-    const uf = this.matFolhas.uniforms;
-    uf.uAlfa.value = Math.max(0, uf.uAlfa.value - dt * 5);
-    this.folhas.visible = uf.uAlfa.value > 0.001;
+    this.uMestre.value = Math.max(0, this.uMestre.value - dt * 4);
+    if (this.uMestre.value <= 0) this.esconderViagem();
     if (!this.brilhoSaidaEmitido && u >= 0.55) {
       this.brilhoSaidaEmitido = true;
       this.emitirBrilhoSaida(s);
@@ -1224,16 +2106,19 @@ export class Cena {
 
   /** Roleta inteira no lugar (fim da chegada ou cena que já nasce com roleta). */
   private aplicarVisivel() {
-    this.afastamento = 0;
+    // pesoPerseguicao não é zerado: se a chegada acabou com a câmera ainda saindo da
+    // perseguição (pulo/giro), ela termina de voltar em avancarRevelacao, sem salto
+    this.esconderViagem();
+    this.uMestre.value = 1;
     this.inclinacao.visible = true;
     this.inclinacao.scale.setScalar(1);
     this.halo.visible = true;
     this.halo.scale.setScalar(1);
     this.matHalo.opacity = 1;
     this.matHalo.color.setScalar(1);
-    this.folhas.visible = false;
-    this.matFolhas.uniforms.uAlfa.value = 0;
-    this.matFace.opacity = 1;
+    this.uFace.uRaio.value = 2;
+    this.uFace.uBorda.value = 0;
+    this.uFace.uOpacidade.value = 1;
     this.face.visible = true;
     this.escalar(this.aro, 1, 0);
     this.escalar(this.lateral, 1, -0.07);
@@ -1245,7 +2130,9 @@ export class Cena {
     this.brilho.visible = true;
     this.ponteiro.visible = true;
     this.ponteiro.position.y = R * 1.1;
-    this.posicionarPinos(1);
+    this.arcoPinos = Infinity;
+    this.pinos.visible = true;
+    this.posicionarPinos();
   }
 
   /** Só a tela de CPF: nada da roleta é desenhado. */
@@ -1253,8 +2140,7 @@ export class Cena {
     this.inclinacao.visible = false;
     this.inclinacao.scale.setScalar(1);
     this.halo.visible = false;
-    this.folhas.visible = false;
-    this.matFolhas.uniforms.uAlfa.value = 0;
+    this.esconderViagem();
   }
 
   private atualizarCamera(dt: number, t: number) {
@@ -1270,12 +2156,10 @@ export class Cena {
       raio = cel.width / 2;
     }
     const ativo = this.fase === "pronto" || this.fase === "girando" || this.fase === "resultado";
-    const alvoInclinacao = ativo ? -0.42 : -0.06;
+    const alvoInclinacao = ativo ? INCLINACAO_ATIVA : -0.06;
     const k = 1 - Math.exp(-dt * 2.2);
     this.inclinacaoAtual += (alvoInclinacao - this.inclinacaoAtual) * k;
-    // mergulho da chegada: o disco começa quase deitado e levanta até a inclinação normal
-    const af = this.afastamento;
-    this.inclinacao.rotation.x = this.inclinacaoAtual + (INCLINACAO_DEITADA - this.inclinacaoAtual) * af;
+    this.inclinacao.rotation.x = this.inclinacaoAtual;
     const alvoAprox = this.fase === "resultado" ? 1 : 0;
     this.aproximacao += (alvoAprox - this.aproximacao) * (1 - Math.exp(-dt * 1.5));
 
@@ -1285,33 +2169,53 @@ export class Cena {
     p.x += (p.ax - p.x) * kp;
     p.y += (p.ay - p.y) * kp;
     const giroFinal = this.fase === "girando" || this.fase === "resultado";
-    const amplitude = this.leve ? 0 : giroFinal ? 0.25 : 1;
-    // durante a chegada a câmera vem de longe, do alto e de lado (como a câmera viva do slide)
-    const az = (Math.sin(t * 0.21) * 0.05 + p.x * 0.07) * amplitude + 0.5 * af * af;
-    const el = (0.06 + Math.sin(t * 0.17) * 0.025 + p.y * 0.04) * amplitude + (ativo ? 0.05 : 0) + 0.55 * af;
+    // amplitude e elevação extra amortecidas: sem salto ao entrar em "pronto" nem ao girar
+    const alvoAmp = this.leve ? 0 : giroFinal ? 0.25 : 1;
+    this.ampAtual += (alvoAmp - this.ampAtual) * (1 - Math.exp(-dt * 2));
+    this.elAtivo += ((ativo ? 0.05 : 0) - this.elAtivo) * k;
+    const amplitude = this.ampAtual;
+    const az = (Math.sin(t * 0.21) * 0.05 + p.x * 0.07) * amplitude;
+    const el = (0.06 + Math.sin(t * 0.17) * 0.025 + p.y * 0.04) * amplitude + this.elAtivo;
 
-    const tanMeio = Math.tan(((FOV / 2) * Math.PI) / 180);
-    this.distBase = ((R * 1.12 * H) / (2 * raio * tanMeio)) * (1 - 0.08 * this.aproximacao);
-    const dist = this.distBase * (1 + 0.9 * af);
-    this.camera.position.set(Math.sin(az) * Math.cos(el) * dist, Math.sin(el) * dist, Math.cos(az) * Math.cos(el) * dist);
-    this.camera.lookAt(0, 0, 0);
-    // desloca a projeção para a roleta cair exatamente na célula do layout
-    this.camera.setViewOffset(W, H, W / 2 - cx, H / 2 - cy, W, H);
-    this.camera.updateProjectionMatrix();
+    this.distBase = ((R * 1.12 * H) / (2 * raio * TAN_MEIO_FOV)) * (1 - 0.08 * this.aproximacao);
+    const dist = this.distBase;
+    const cam = this.camera;
+    cam.position.set(Math.sin(az) * Math.cos(el) * dist, Math.sin(el) * dist, Math.cos(az) * Math.cos(el) * dist);
+    cam.lookAt(0, 0, 0);
+
+    // chegada: mistura com a câmera de perseguição. Posição linear; a orientação é um lookAt
+    // da posição misturada para um alvo entre a origem (enquadramento) e o da perseguição
+    // (logo à frente da estrela), mais a rolagem proporcional: a estrela fica no quadro
+    // durante a mistura (um slerp entre as duas orientações podia deixá-la de fora)
+    let w = this.pesoPerseguicao;
+    if (w > 0.0005 && this.compCurva > 0 && !this.viagemPendente) {
+      this.posEnq.copy(cam.position);
+      this.calcularPerseguicao();
+      cam.position.lerpVectors(this.posEnq, this.posPerseg, w);
+      cam.lookAt(this.vA.copy(this.alvoPerseg).multiplyScalar(w));
+      cam.rotateZ(-this.rolagemPerseg * w);
+    } else w = 0;
+
+    // desloca a projeção para a roleta cair exatamente na célula do layout (centrada na viagem)
+    const fora = 1 - w;
+    cam.setViewOffset(W, H, (W / 2 - cx) * fora, (H / 2 - cy) * fora, W, H);
+    cam.updateProjectionMatrix();
   }
 
   private atualizarFaiscas(dt: number) {
     const attr = this.faiscas.geometry.getAttribute("position") as BufferAttribute;
     let mudou = false;
-    this.poolFaiscas.forEach((f, i) => {
-      if (f.vida <= 0) return;
+    const pool = this.poolFaiscas;
+    for (let i = 0; i < pool.length; i++) {
+      const f = pool[i];
+      if (f.vida <= 0) continue;
       f.vida -= dt * 0.9;
       f.vel.multiplyScalar(1 - dt * 1.8);
       f.pos.addScaledVector(f.vel, dt);
       if (f.vida <= 0) f.pos.set(9999, 9999, 9999);
       attr.setXYZ(i, f.pos.x, f.pos.y, f.pos.z);
       mudou = true;
-    });
+    }
     if (mudou) attr.needsUpdate = true;
   }
 
@@ -1323,43 +2227,65 @@ export class Cena {
 
   /**
    * Avaliação inicial (por tempo, normalizada pelo vsync da tela) + monitor contínuo.
-   * Só rebaixa; troca para o 2D fora do giro (o estado vive no TotemStore, nada se perde).
+   * Só rebaixa e nunca decide no meio do giro nem da chegada/saída da roleta (o estado vive
+   * no TotemStore, nada se perde). Sem alocação: amostras num Float32Array ordenado.
    */
   private avaliarDesempenho(dtMs: number, agora: number) {
     if (agora - this.inicio < 1500) return;
-    this.ema = this.ema ? this.ema * 0.95 + dtMs * 0.05 : dtMs;
-    if (this.ema > 45) {
-      if (!this.lentoDesde) this.lentoDesde = agora;
-      else if (agora - this.lentoDesde > 3000 && this.fase !== "girando") {
-        // primeiro tenta baixar a resolução; só cai para o 2D se já estiver no mínimo
-        if (this.dprAtual > 0.75) {
-          this.dprAtual = this.dprAtual > 1 ? 1 : 0.75;
-          this.renderer.setPixelRatio(this.dprAtual);
-          this.redimensionar();
-          this.ema = 0;
-          this.lentoDesde = 0;
+    // chegada/saída: animação de passagem, com picos próprios; não conta para o monitor
+    const revelando = this.modoRevelacao === "chegando" || this.modoRevelacao === "saindo";
+    if (revelando) {
+      this.lentoDesde = 0;
+    } else {
+      this.ema = this.ema ? this.ema * 0.95 + dtMs * 0.05 : dtMs;
+      if (this.ema > 45) {
+        if (!this.lentoDesde) this.lentoDesde = agora;
+        else if (agora - this.lentoDesde > 3000 && this.fase !== "girando") {
+          // primeiro tenta baixar a resolução; só cai para o 2D se já estiver no mínimo
+          if (this.dprAtual > 0.75) {
+            this.dprAtual = this.dprAtual > 1 ? 1 : 0.75;
+            this.renderer.setPixelRatio(this.dprAtual);
+            this.redimensionar();
+            this.ema = 0;
+            this.lentoDesde = 0;
+            return;
+          }
+          this.falhar(`desempenho insuficiente (≈${this.ema.toFixed(0)} ms por quadro)`);
           return;
         }
-        this.falhar(`desempenho insuficiente (≈${this.ema.toFixed(0)} ms por quadro)`);
-        return;
-      }
-    } else this.lentoDesde = 0;
+      } else this.lentoDesde = 0;
+    }
 
     if (this.avaliado) return;
+    // giro e chegada/saída: a janela recomeça do zero depois, com a cena parada (nenhuma
+    // decisão, nem falhar nem trocar o DPR, acontece no meio deles)
+    if (revelando || this.fase === "girando") {
+      this.nAmostras = 0;
+      this.janelaInicio = 0;
+      return;
+    }
     if (!this.janelaInicio) this.janelaInicio = agora;
-    this.amostrasQuadro.push(dtMs);
-    const n = this.amostrasQuadro.length;
-    const ord = [...this.amostrasQuadro].sort((a, b) => a - b);
+    // inserção ordenada (n ≤ 90): mediana e percentil direto do buffer
+    const ord = this.amostrasQuadro;
+    if (this.nAmostras < MAX_AMOSTRAS) {
+      let j = this.nAmostras++;
+      while (j > 0 && ord[j - 1] > dtMs) {
+        ord[j] = ord[j - 1];
+        j--;
+      }
+      ord[j] = dtMs;
+    }
+    const n = this.nAmostras;
     const mediana = ord[Math.floor(n / 2)];
     if (n >= 15 && mediana > 60) {
       this.falhar(`desempenho insuficiente (${mediana.toFixed(0)} ms por quadro)`);
       return;
     }
-    if (agora - this.janelaInicio < 2000 && n < 90) return;
+    if (agora - this.janelaInicio < 2000 && n < MAX_AMOSTRAS) return;
     const periodo = Math.max(6, ord[Math.floor(n * 0.1)]); // ~16,7 ms em 60 Hz; ~33 ms em 30 Hz
     const limiteFalha = Math.max(34, periodo * 2.2);
     const limiteReduz = Math.max(21, periodo * 1.4);
-    this.amostrasQuadro = [];
+    this.nAmostras = 0;
     this.janelaInicio = 0;
     if (mediana > limiteFalha) {
       this.falhar(`desempenho insuficiente (${mediana.toFixed(0)} ms por quadro)`);
@@ -1399,6 +2325,7 @@ export class Cena {
 
     // rotação vem da máquina de estados; aqui só desenhamos
     const theta = anguloAtual(this.store.rotacao, agora);
+    this.thetaAtual = theta;
     this.disco.rotation.z = -theta;
     const i = fatiaSobPonteiro(this.fatias, theta);
     if (i !== this.indicePonteiro) {
@@ -1424,7 +2351,8 @@ export class Cena {
     this.matEnxame.uniforms.uMix.value = this.mixEnxame;
     this.matEnxame.uniforms.uAlfa.value = this.alfaEnxame;
 
-    for (const f of this.fitas) f.rotation.z = Math.sin(t * 0.05) * 0.01;
+    const rotFitas = Math.sin(t * 0.05) * 0.01;
+    for (let k = 0; k < this.fitas.length; k++) this.fitas[k].rotation.z = rotFitas;
     this.avancarRevelacao(dt);
     this.atualizarCamera(dt, t);
     this.aplicarRevelacao(dt);

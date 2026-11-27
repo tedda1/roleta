@@ -4,9 +4,16 @@ Roleta de brindes para a confraternização **OncologyGroup — "A nossa força 
 feita para rodar numa **tela touch** (totem) em um PC desconhecido, **sem internet**.
 
 **Fluxo do participante:** a tela inicial mostra só o campo de CPF (com teclado numérico na tela).
-Quando o CPF é confirmado, o cartão "descola" da tela e a roleta chega com uma animação inspirada no
-slide de referência: no 3D, centenas de folhas saem do cartão, voam em perspectiva e se juntam formando
-a roleta (aro, pinos e ponteiro surgem em seguida); no 2D, a roleta "levanta" em perspectiva via CSS.
+Quando o CPF é confirmado:
+
+- **3D (~8 s, ~5 s no modo leve):** o cartão do CPF se contrai num ponto de luz que vira uma
+  **estrela**. A estrela viaja pelo espaço com a câmera acompanhando (rastro dourado, estrelas virando
+  riscos de velocidade, constelações acendendo e se ligando a ela: "cada conexão, uma parceria"),
+  chega ao lugar da roleta, explode numa supernova e **vira a roleta**: a face surge de dentro para
+  fora com borda dourada, o aro acende, os pinos nascem como estrelinhas e o ponteiro cai.
+  **Toque na tela para pular.** O botão "Girar" só aparece quando a roleta termina de se formar.
+- **2D:** o cartão "descola" da tela e a roleta "levanta" em perspectiva via CSS (~1,3 s).
+
 Depois do resultado, volta para a tela de CPF.
 
 - **Versão 2D com detalhes 3D** (`/`): roleta em canvas com perspectiva, espessura, aro metálico, brilho e céu da identidade visual. Leve: só anima `transform`.

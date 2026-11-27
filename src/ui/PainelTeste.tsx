@@ -16,11 +16,13 @@ interface Props {
   modo: ModoPalco;
   leve: boolean;
   motivo3d: string | null;
+  /** true enquanto a estrela viaja (3D): não dá para girar ainda */
+  aguardandoRoleta: boolean;
   alternarModo: () => void;
   alternarLeve: () => void;
 }
 
-export function PainelTeste({ store, estado, modo, leve, motivo3d, alternarModo, alternarLeve }: Props) {
+export function PainelTeste({ store, estado, modo, leve, motivo3d, aguardandoRoleta, alternarModo, alternarLeve }: Props) {
   const [aberto, setAberto] = useState(true);
   const [auto, setAuto] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -69,11 +71,11 @@ export function PainelTeste({ store, estado, modo, leve, motivo3d, alternarModo,
     let t: ReturnType<typeof setTimeout> | undefined;
     if (fase === "atracao") t = setTimeout(preencherCpf, 1500);
     else if (fase === "cpf" && !estado.verificando) t = setTimeout(preencherCpf, estado.aviso ? 1500 : 700);
-    else if (fase === "pronto") t = setTimeout(girar, 1000);
+    else if (fase === "pronto" && !aguardandoRoleta) t = setTimeout(girar, 1000);
     else if (fase === "resultado") t = setTimeout(() => store.fecharResultado(), 3500);
     else if (fase === "esgotado") t = setTimeout(() => void reiniciar(), 3000);
     return () => clearTimeout(t);
-  }, [auto, fase, estado.verificando, estado.aviso, estado.digitos, preencherCpf, girar, reiniciar, store]);
+  }, [auto, fase, aguardandoRoleta, estado.verificando, estado.aviso, estado.digitos, preencherCpf, girar, reiniciar, store]);
 
   // Medidor de quadros: escreve direto no DOM a cada 0,5 s (sem re-render do React).
   useEffect(() => {
@@ -129,7 +131,7 @@ export function PainelTeste({ store, estado, modo, leve, motivo3d, alternarModo,
         <button className={s.botao} disabled={fase !== "atracao" && fase !== "cpf"} onClick={preencherCpf}>
           CPF de teste
         </button>
-        <button className={`${s.botao} ${s.destaque}`} disabled={fase !== "pronto"} onClick={girar}>
+        <button className={`${s.botao} ${s.destaque}`} disabled={fase !== "pronto" || aguardandoRoleta} onClick={girar}>
           Girar
         </button>
         <button className={`${s.botao} ${auto ? s.ligado : ""}`} onClick={() => setAuto((a) => !a)}>

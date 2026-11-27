@@ -9,6 +9,10 @@ interface Props {
   store: TotemStore;
   estado: EstadoTotem;
   abrirAdmin: () => void;
+  /** 3D: o painel com "Girar" fica escondido até a estrela virar roleta. */
+  aguardandoRoleta?: boolean;
+  /** 2D: o painel entra com atraso fixo de CSS (a chegada 2D é curta). */
+  atrasoCss?: boolean;
 }
 
 function Visor({ digitos, ok }: { digitos: string; ok?: boolean }) {
@@ -35,19 +39,24 @@ function Chances({ estado }: { estado: EstadoTotem }) {
   );
 }
 
-/** Cartão do CPF "descolando" da tela no instante da confirmação (só visual, ~0,9 s). */
-export function CpfSaindo({ digitos }: { digitos: string }) {
+/**
+ * Cartão do CPF no instante da confirmação (só visual, ~0,9 s).
+ * "estrela" (3D): o cartão se contrai num ponto de luz, que vira a estrela viajante da cena.
+ * "descolar" (2D): o cartão inclina e se afasta em profundidade.
+ */
+export function CpfSaindo({ digitos, variante }: { digitos: string; variante: "estrela" | "descolar" }) {
   return (
     <div className={s.saindo} aria-hidden>
-      <section className={`${s.painel} ${s.cartaoSaindo}`}>
+      <section className={`${s.painel} ${variante === "estrela" ? s.cartaoEstrela : s.cartaoSaindo}`}>
         <p className={s.kicker}>CPF confirmado ✓</p>
         <Visor digitos={digitos} ok />
       </section>
+      {variante === "estrela" && <span className={s.pontoLuz} />}
     </div>
   );
 }
 
-export function Painel({ store, estado, abrirAdmin }: Props) {
+export function Painel({ store, estado, abrirAdmin, aguardandoRoleta = false, atrasoCss = true }: Props) {
   const { fase } = estado;
 
   if (fase === "carregando") {
@@ -140,7 +149,10 @@ export function Painel({ store, estado, abrirAdmin }: Props) {
   // CPF confirmado: a roleta chegou; o painel lateral entra depois da animação.
   if (fase === "pronto") {
     return (
-      <section className={`${s.painel} ${s.depoisDaChegada}`}>
+      <section
+        className={`${s.painel} ${aguardandoRoleta ? s.escondido : atrasoCss ? s.depoisDaChegada : s.entrarAgora}`}
+        aria-hidden={aguardandoRoleta}
+      >
         {estado.avulsa ? (
           <>
             <p className={s.kicker}>Jogada liberada pela equipe</p>

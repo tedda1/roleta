@@ -74,7 +74,7 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
     if (estado.fase === "resultado" && !estado.retomada) som.brilho();
   }, [estado.fase, estado.retomada]);
 
-  // Confirmou o CPF: o cartão "descola" da tela enquanto a roleta chega.
+  // Confirmou o CPF: o cartão "descola" da tela (2D) ou vira estrela (3D) enquanto a roleta chega.
   const [cpfSaindo, setCpfSaindo] = useState<string | null>(null);
   const faseAnterior = useRef(estado.fase);
   const timerSaida = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -151,6 +151,33 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
 
   const modo: ModoPalco = prefs.modo === "3d" && !motivo3d ? "3d" : "2d";
   const comRoleta = estado.fase === "pronto" || estado.fase === "girando" || estado.fase === "resultado";
+
+  // 3D: enquanto a estrela viaja e vira roleta (~8 s), o painel com "Girar" fica escondido
+  // e a roleta não aceita arrasto. A cena avisa o fim com o evento "roleta:chegada-concluida".
+  const [aguardandoRoleta, setAguardandoRoleta] = useState(false);
+  const faseAntesChegada = useRef(estado.fase);
+  useEffect(() => {
+    const antes = faseAntesChegada.current;
+    faseAntesChegada.current = estado.fase;
+    const semRoleta = antes !== "pronto" && antes !== "girando" && antes !== "resultado";
+    if (estado.fase !== "pronto" || !semRoleta || antes === "carregando" || modo !== "3d") return;
+    setAguardandoRoleta(true);
+    store.tocar();
+    const fim = () => {
+      clearTimeout(seguranca);
+      window.removeEventListener("roleta:chegada-concluida", fim);
+      setAguardandoRoleta(false);
+      store.tocar(); // o prazo de inatividade conta a partir da roleta pronta, não da confirmação
+    };
+    window.addEventListener("roleta:chegada-concluida", fim, { once: true });
+    // nunca deixa o participante sem o botão; menor que a ociosidade (20 s) para sempre vencer
+    const seguranca = setTimeout(fim, 13_000);
+    return () => {
+      window.removeEventListener("roleta:chegada-concluida", fim);
+      clearTimeout(seguranca);
+      setAguardandoRoleta(false);
+    };
+  }, [estado.fase, modo, store]);
   // atração e CPF são a mesma tela: não remonta (nem reanima) o painel ao digitar o 1º número
   const chavePainel = estado.fase === "atracao" || estado.fase === "cpf" ? "cpf" : estado.fase;
 
@@ -162,15 +189,25 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
           <Palco3D store={store} fatias={estado.fatias} fase={estado.fase} leve={prefs.leve} celulaRef={celulaRef} aoFalhar={falhou3d} />
         </GuardaPalco>
       )}
-      <main className={`${s.totem} ${modo === "3d" ? s.modo3d : ""} ${comRoleta ? "" : s.semRoleta}`}>
+      <main
+        className={`${s.totem} ${modo === "3d" ? s.modo3d : ""} ${comRoleta ? "" : s.semRoleta} ${aguardandoRoleta ? s.aguardando : ""}`}
+      >
         <div ref={celulaRef} className={s.celula} data-roleta>
           {modo === "2d" && <Palco2D store={store} fatias={estado.fatias} fase={estado.fase} leve={prefs.leve} />}
         </div>
         <div className={s.lado}>
-          <Painel key={chavePainel} store={store} estado={estado} abrirAdmin={abrirAdmin} />
+          <Painel
+            key={chavePainel}
+            store={store}
+            estado={estado}
+            abrirAdmin={abrirAdmin}
+            aguardandoRoleta={aguardandoRoleta}
+            atrasoCss={modo === "2d"}
+          />
         </div>
       </main>
-      {cpfSaindo && <CpfSaindo digitos={cpfSaindo} />}
+      {cpfSaindo && <CpfSaindo digitos={cpfSaindo} variante={modo === "3d" ? "estrela" : "descolar"} />}
+      {aguardandoRoleta && <p className={s.dicaPular}>Toque na tela para pular</p>}
       <div className={s.cantoAdmin} onPointerDown={toqueCanto} aria-hidden />
       {demo && (
         <PainelTeste
@@ -179,6 +216,7 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
           modo={modo}
           leve={prefs.leve}
           motivo3d={motivo3d}
+          aguardandoRoleta={aguardandoRoleta}
           alternarModo={() => mudarPrefs({ ...prefs, modo: modo === "3d" ? "2d" : "3d" })}
           alternarLeve={() => mudarPrefs({ ...prefs, leve: !prefs.leve })}
         />

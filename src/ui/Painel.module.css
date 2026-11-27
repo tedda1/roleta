@@ -109,6 +109,35 @@
   box-shadow: 0 6px 0 #8a4a12, 0 0 48px rgba(255, 210, 63, 0.45);
 }
 
+/* instrução de arrastar (no lugar do botão "Girar") */
+.arraste {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: clamp(64px, 9vmin, 92px);
+  padding: 0 24px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(255, 210, 63, 0.18), rgba(255, 138, 42, 0.12));
+  border: 1px solid rgba(255, 210, 63, 0.55);
+  color: #fff7d6;
+  font-family: var(--fonte-titulo);
+  font-weight: 700;
+  font-size: clamp(22px, 3.2vmin, 32px);
+}
+
+.maozinha {
+  display: inline-block;
+  font-size: 1.25em;
+  animation: arrastar 1.6s ease-in-out infinite;
+}
+
+@keyframes arrastar {
+  0% { transform: translateX(-14px) rotate(-12deg); opacity: 0.6; }
+  50% { transform: translateX(14px) rotate(12deg); opacity: 1; }
+  100% { transform: translateX(-14px) rotate(-12deg); opacity: 0.6; }
+}
+
 .respira {
   animation: respirar 2.6s ease-in-out infinite;
 }

@@ -7,7 +7,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { CONFIG_DEMO, gerarCpfTeste, proximoBrindeExtra } from "@/core/demo";
 import { LIMITE_BRINDES } from "@/core/regras";
 import type { EstadoTotem, TotemStore } from "@/core/totem";
-import type { ModoPalco } from "./preferencias";
+import type { Entrada, ModoPalco } from "./preferencias";
 import { NOMES_QUALIDADE, type Qualidade } from "@/palco3d/qualidade";
 import s from "./PainelTeste.module.css";
 
@@ -23,9 +23,11 @@ interface Props {
   aguardandoRoleta: boolean;
   alternarModo: () => void;
   alternarQualidade: () => void;
+  entrada: Entrada;
+  alternarEntrada: () => void;
 }
 
-export function PainelTeste({ store, estado, modo, qualidade, nivelAtivo, motivo3d, aguardandoRoleta, alternarModo, alternarQualidade }: Props) {
+export function PainelTeste({ store, estado, modo, qualidade, nivelAtivo, motivo3d, aguardandoRoleta, alternarModo, alternarQualidade, entrada, alternarEntrada }: Props) {
   const [aberto, setAberto] = useState(true);
   const [auto, setAuto] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
@@ -152,6 +154,9 @@ export function PainelTeste({ store, estado, modo, qualidade, nivelAtivo, motivo
         </button>
         <button className={s.botao} onClick={alternarModo}>
           Ver em {modo === "3d" ? "2D" : "3D"}
+        </button>
+        <button className={s.botao} onClick={alternarEntrada}>
+          Entrada: {entrada === "cadentes" ? "Cadentes" : "Estrela"}
         </button>
         <button className={s.botao} onClick={alternarQualidade}>
           Qualidade: {NOMES_QUALIDADE[qualidade]}

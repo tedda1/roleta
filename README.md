@@ -6,15 +6,19 @@ feita para rodar numa **tela touch** (totem) em um PC desconhecido, **sem intern
 **Fluxo do participante:** a tela inicial mostra só o campo de CPF (com teclado numérico na tela).
 Quando o CPF é confirmado:
 
-- **3D (~8 s, ~5 s no modo leve):** o cartão do CPF se contrai num ponto de luz que vira uma
-  **estrela**. A estrela viaja pelo espaço com a câmera acompanhando (rastro dourado, estrelas virando
-  riscos de velocidade, constelações acendendo e se ligando a ela: "cada conexão, uma parceria"),
-  chega ao lugar da roleta, explode numa supernova e **vira a roleta**: a face surge de dentro para
-  fora com borda dourada, o aro acende, os pinos nascem como estrelinhas e o ponteiro cai.
-  **Toque na tela para pular.** O botão "Girar" só aparece quando a roleta termina de se formar.
+- **3D (~5 s, ~3,5 s no modo leve)**, com duas entradas (Administrador > **Entrada 3D**, ou `?entrada=`):
+  - **Estrelas cadentes (padrão):** estrelas nas **cores da logo** cruzam o espaço com rastros
+    coloridos, entram numa espiral e, ao se juntarem, **formam a roleta** (flash, onda de choque,
+    face revelada de dentro para fora, aro acendendo nas cores da logo, pinos, ponteiro caindo).
+  - **Estrela viajante:** o cartão do CPF vira uma estrela que viaja pelo espaço (rastro, riscos de
+    velocidade, constelações se ligando), explode numa supernova e vira a roleta.
+  - No instante em que a roleta se forma toca um **som** sintetizado (whoosh + acorde + cintilar).
+  - **Toque na tela para pular.**
 - **2D:** o cartão "descola" da tela e a roleta "levanta" em perspectiva via CSS (~1,3 s).
 
-Depois do resultado, volta para a tela de CPF.
+**Girar:** não há botão — o participante **arrasta a roleta com o dedo** e solta (um lance rápido ou
+um arrasto de ~1/10 de volta). Ao parar, a **fatia vencedora acende**, o ponteiro pulsa e uma
+explosão de estrelas cadentes nas cores da logo sai do ponteiro. Depois do resultado, volta para a tela de CPF.
 
 - **Versão 2D com detalhes 3D** (`/`): roleta em canvas com perspectiva, espessura, aro metálico, brilho e céu da identidade visual. Leve: só anima `transform`.
 - **Versão 3D interativa** (`/3d/`): three.js; a roleta "descola" da tela e ganha volume, câmera viva com parallax, agarrar-e-lançar com o dedo, faíscas ao tocar o céu e revelação com estrelas que formam uma estrela. Se o PC não aguentar, cai sozinha para o 2D sem perder nada.

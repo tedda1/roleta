@@ -49,6 +49,48 @@ class Som {
     }
   }
 
+  /**
+   * A roleta se formou: "whoosh" de ar subindo, acorde brilhante (Ré maior com 9ª, levemente
+   * desafinado para soar cheio) e um cintilar agudo descendo. ~2 s, volume moderado.
+   */
+  formacao(): void {
+    const ctx = this.ctx;
+    if (!this.ativo || !ctx || ctx.state !== "running") return;
+    const t = ctx.currentTime;
+    try {
+      // whoosh: ruído filtrado com o filtro subindo
+      const dur = 0.7;
+      const buf = ctx.createBuffer(1, Math.floor(ctx.sampleRate * dur), ctx.sampleRate);
+      const dados = buf.getChannelData(0);
+      for (let i = 0; i < dados.length; i++) dados[i] = Math.random() * 2 - 1;
+      const ruido = ctx.createBufferSource();
+      ruido.buffer = buf;
+      const filtro = ctx.createBiquadFilter();
+      filtro.type = "bandpass";
+      filtro.Q.value = 1.2;
+      filtro.frequency.setValueAtTime(300, t);
+      filtro.frequency.exponentialRampToValueAtTime(5000, t + dur);
+      const gR = ctx.createGain();
+      gR.gain.setValueAtTime(0.0001, t);
+      gR.gain.exponentialRampToValueAtTime(0.18, t + dur * 0.8);
+      gR.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.15);
+      ruido.connect(filtro).connect(gR).connect(ctx.destination);
+      ruido.start(t);
+      ruido.stop(t + dur + 0.2);
+
+      // acorde no impacto (Ré maior com 9ª), duas vozes levemente desafinadas por nota
+      const impacto = t + dur * 0.85;
+      for (const f of [293.66, 369.99, 440, 587.33, 659.25]) {
+        this.nota(f, impacto, 1.8, 0.05, "sine");
+        this.nota(f * 1.004, impacto, 1.6, 0.03, "triangle");
+      }
+      // cintilar: notas agudas rápidas descendo
+      [2349.3, 1975.5, 1760, 1480, 1318.5, 1174.7].forEach((f, i) => this.nota(f, impacto + 0.05 + i * 0.06, 0.5, 0.035));
+    } catch {
+      /* ignora */
+    }
+  }
+
   /** Brilho da revelação: arpejo ascendente. */
   brilho(): void {
     if (!this.ativo || !this.ctx || this.ctx.state !== "running") return;

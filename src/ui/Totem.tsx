@@ -11,7 +11,7 @@ import { ligarGesto } from "./gesto";
 import { useKiosk } from "./kiosk";
 import { CpfSaindo, Painel } from "./Painel";
 import { PainelTeste } from "./PainelTeste";
-import { ModoPalco, Preferencias, lerPreferencias, salvarPreferencias } from "./preferencias";
+import { Entrada, ModoPalco, Preferencias, lerPreferencias, salvarPreferencias } from "./preferencias";
 import { Qualidade, proximaQualidade } from "@/palco3d/qualidade";
 
 const QUALIDADES_URL: Qualidade[] = ["auto", "leve", "normal", "alta"];
@@ -43,7 +43,7 @@ interface PropsTotem {
 export default function Totem({ modoInicial, demo = false }: PropsTotem) {
   const [store] = useState(() => new TotemStore(undefined, demo ? OPCOES_DEMO : {}));
   const estado = useSyncExternalStore(store.assinar, store.getEstado, store.getEstado);
-  const [prefs, setPrefs] = useState<Preferencias>({ modo: modoInicial ?? "2d", qualidade: "auto" });
+  const [prefs, setPrefs] = useState<Preferencias>({ modo: modoInicial ?? "2d", qualidade: "auto", entrada: "cadentes" });
   const leve = prefs.qualidade === "leve";
   // nível efetivo da cena 3D (o avaliador de desempenho pode rebaixar durante o uso)
   const [nivelAtivo, setNivelAtivo] = useState<string | null>(null);
@@ -61,13 +61,14 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
 
   useEffect(() => {
     // A tela de teste não lê nem grava as preferências do totem real.
-    const p = demo ? { modo: modoInicial ?? "3d", qualidade: "auto" as Qualidade, salvo: false } : lerPreferencias();
+    const p = demo ? { modo: modoInicial ?? "3d", qualidade: "auto" as Qualidade, entrada: "cadentes" as Entrada, salvo: false } : lerPreferencias();
     const q = new URLSearchParams(location.search);
     const modoUrl = q.get("modo");
     // eslint-disable-next-line react-hooks/set-state-in-effect -- preferências só existem no navegador
     setPrefs({
       // prioridade: ?modo= na URL > escolha salva no administrador > rota (/3d/) > 2D
       modo: modoUrl === "2d" || modoUrl === "3d" ? modoUrl : p.salvo ? p.modo : (modoInicial ?? p.modo),
+      entrada: q.get("entrada") === "estrela" ? "estrela" : q.get("entrada") === "cadentes" ? "cadentes" : p.entrada,
       qualidade: q.get("leve") === "1" ? "leve" : QUALIDADES_URL.includes(q.get("qualidade") as Qualidade) ? (q.get("qualidade") as Qualidade) : p.qualidade,
     });
     void store.iniciar().then(async () => {
@@ -189,6 +190,22 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
       setAguardandoRoleta(false);
     };
   }, [estado.fase, modo, store]);
+
+  // Som de formação: no 3D a cena avisa o instante em que as estrelas viram a roleta;
+  // no 2D toca junto com a chegada em CSS.
+  useEffect(() => {
+    const formou = () => som.formacao();
+    window.addEventListener("roleta:formou", formou);
+    return () => window.removeEventListener("roleta:formou", formou);
+  }, []);
+  const faseAntesSom = useRef(estado.fase);
+  useEffect(() => {
+    const antes = faseAntesSom.current;
+    faseAntesSom.current = estado.fase;
+    if (modo !== "2d" || estado.fase !== "pronto" || (antes !== "cpf" && antes !== "atracao")) return;
+    const t = setTimeout(() => som.formacao(), 450);
+    return () => clearTimeout(t);
+  }, [estado.fase, modo]);
   // atração e CPF são a mesma tela: não remonta (nem reanima) o painel ao digitar o 1º número
   const chavePainel = estado.fase === "atracao" || estado.fase === "cpf" ? "cpf" : estado.fase;
 
@@ -197,7 +214,7 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
       {modo === "2d" && <CeuFundo leve={leve} />}
       {modo === "3d" && (
         <GuardaPalco aoFalhar={falhou3d}>
-          <Palco3D store={store} fatias={estado.fatias} fase={estado.fase} qualidade={prefs.qualidade} celulaRef={celulaRef} aoFalhar={falhou3d} />
+          <Palco3D store={store} fatias={estado.fatias} fase={estado.fase} qualidade={prefs.qualidade} entrada={prefs.entrada} celulaRef={celulaRef} aoFalhar={falhou3d} />
         </GuardaPalco>
       )}
       <main
@@ -230,6 +247,8 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
           nivelAtivo={nivelAtivo}
           aguardandoRoleta={aguardandoRoleta}
           alternarModo={() => mudarPrefs({ ...prefs, modo: modo === "3d" ? "2d" : "3d" })}
+          entrada={prefs.entrada}
+          alternarEntrada={() => mudarPrefs({ ...prefs, entrada: prefs.entrada === "cadentes" ? "estrela" : "cadentes" })}
           alternarQualidade={() => mudarPrefs({ ...prefs, qualidade: proximaQualidade(prefs.qualidade) })}
         />
       )}

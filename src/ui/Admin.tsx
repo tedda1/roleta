@@ -227,6 +227,9 @@ export function Admin({ store, estado, prefs, mudarPrefs, motivo3d, fechar }: Pr
       <button className={s.botao} onClick={() => mudarPrefs({ ...prefs, qualidade: proximaQualidade(prefs.qualidade) })}>
         Qualidade 3D: {NOMES_QUALIDADE[prefs.qualidade]}
       </button>
+      <button className={s.botao} onClick={() => mudarPrefs({ ...prefs, entrada: prefs.entrada === "cadentes" ? "estrela" : "cadentes" })}>
+        Entrada 3D: {prefs.entrada === "cadentes" ? "Estrelas cadentes" : "Estrela viajante"}
+      </button>
       <a className={s.botao} href="/diagnostico/">
         Diagnóstico do PC
       </a>

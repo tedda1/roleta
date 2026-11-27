@@ -1,4 +1,5 @@
 "use client";
+import { NOMES_QUALIDADE, proximaQualidade } from "@/palco3d/qualidade";
 import { useEffect, useRef, useState } from "react";
 import { carregarConfig, ResultadoConfig } from "@/core/config";
 import { formatarCpf } from "@/core/cpf";
@@ -223,8 +224,8 @@ export function Admin({ store, estado, prefs, mudarPrefs, motivo3d, fechar }: Pr
       <button className={s.botao} onClick={() => mudarPrefs({ ...prefs, modo: prefs.modo === "2d" ? "3d" : "2d" })}>
         Versão: {prefs.modo === "2d" ? "2D" : "3D"} (trocar)
       </button>
-      <button className={s.botao} onClick={() => mudarPrefs({ ...prefs, leve: !prefs.leve })}>
-        Modo leve: {prefs.leve ? "ligado" : "desligado"}
+      <button className={s.botao} onClick={() => mudarPrefs({ ...prefs, qualidade: proximaQualidade(prefs.qualidade) })}>
+        Qualidade 3D: {NOMES_QUALIDADE[prefs.qualidade]}
       </button>
       <a className={s.botao} href="/diagnostico/">
         Diagnóstico do PC

@@ -55,6 +55,7 @@ import {
   Vector3,
   WebGLRenderer,
 } from "three";
+import { PERFIS, type NivelQualidade, type PerfilQualidade } from "./qualidade";
 import { desenharFace } from "@/arte/face";
 import { LUZES, familiaCanvasTitulo } from "@/arte/paleta";
 import { Fatia, TAU, anguloAtual, fatiaSobPonteiro, modPositivo } from "@/core/geometria";
@@ -152,7 +153,7 @@ function outBounce(k: number): number {
 }
 
 export interface OpcoesCena {
-  leve: boolean;
+  nivel: NivelQualidade;
   obterCelula: () => DOMRect | null;
   aoFalhar: (motivo: string) => void;
 }
@@ -173,7 +174,8 @@ function texturaCanvas(lado: number, desenhar: (ctx: CanvasRenderingContext2D, l
 }
 
 /** Matcap gerado em canvas: dá aparência metálica sem nenhuma luz na cena. */
-function matcap(base: string, luz: string, sombra: string): CanvasTexture {
+function matcap(base: string, luz: string, sombra: string, lado = 128): CanvasTexture {
+  if (lado > 128) return matcapRico(base, luz, sombra, lado);
   return texturaCanvas(128, (ctx, l) => {
     const g = ctx.createRadialGradient(l * 0.36, l * 0.3, l * 0.02, l * 0.5, l * 0.5, l * 0.52);
     g.addColorStop(0, luz);
@@ -189,8 +191,68 @@ function matcap(base: string, luz: string, sombra: string): CanvasTexture {
   });
 }
 
-function texturaBrilho(cor: string): CanvasTexture {
-  return texturaCanvas(128, (ctx, l) => {
+/**
+ * Matcap "de estúdio" para os níveis normal/alta: sombreamento esférico, luz principal
+ * forte e pequena, luz de preenchimento, reflexo de horizonte e borda clara (fresnel).
+ */
+function matcapRico(base: string, luz: string, sombra: string, lado: number): CanvasTexture {
+  return texturaCanvas(lado, (ctx, l) => {
+    const c = l / 2;
+    const r = l / 2;
+    // corpo: degradê esférico
+    const corpo = ctx.createRadialGradient(c * 0.82, c * 0.7, r * 0.05, c, c, r);
+    corpo.addColorStop(0, luz);
+    corpo.addColorStop(0.35, base);
+    corpo.addColorStop(0.8, sombra);
+    corpo.addColorStop(1, sombra);
+    ctx.fillStyle = corpo;
+    ctx.fillRect(0, 0, l, l);
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(c, c, r, 0, Math.PI * 2);
+    ctx.clip();
+    // reflexo de horizonte (faixa clara levemente curva, típica de metal polido)
+    const horiz = ctx.createLinearGradient(0, c * 0.95, 0, c * 1.25);
+    horiz.addColorStop(0, "rgba(255,255,255,0)");
+    horiz.addColorStop(0.45, "rgba(255,255,255,0.28)");
+    horiz.addColorStop(0.55, "rgba(255,255,255,0.05)");
+    horiz.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = horiz;
+    ctx.beginPath();
+    ctx.ellipse(c, c * 1.1, r * 1.05, r * 0.22, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // luz de preenchimento azulada embaixo à direita (céu da identidade)
+    const fill = ctx.createRadialGradient(c * 1.45, c * 1.55, 0, c * 1.45, c * 1.55, r * 0.6);
+    fill.addColorStop(0, "rgba(120,180,255,0.55)");
+    fill.addColorStop(1, "rgba(120,180,255,0)");
+    ctx.fillStyle = fill;
+    ctx.fillRect(0, 0, l, l);
+    // borda (fresnel): anel claro fino perto da silhueta
+    const borda = ctx.createRadialGradient(c, c, r * 0.82, c, c, r);
+    borda.addColorStop(0, "rgba(255,255,255,0)");
+    borda.addColorStop(0.85, "rgba(200,220,255,0.28)");
+    borda.addColorStop(1, "rgba(255,255,255,0.05)");
+    ctx.fillStyle = borda;
+    ctx.fillRect(0, 0, l, l);
+    // luz principal: brilho pequeno e intenso, com halo suave
+    const kx = c * 0.62;
+    const ky = c * 0.5;
+    const halo = ctx.createRadialGradient(kx, ky, 0, kx, ky, r * 0.42);
+    halo.addColorStop(0, "rgba(255,255,255,0.75)");
+    halo.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = halo;
+    ctx.fillRect(0, 0, l, l);
+    const nucleo = ctx.createRadialGradient(kx, ky, 0, kx, ky, r * 0.09);
+    nucleo.addColorStop(0, "rgba(255,255,255,1)");
+    nucleo.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = nucleo;
+    ctx.fillRect(0, 0, l, l);
+    ctx.restore();
+  });
+}
+
+function texturaBrilho(cor: string, lado = 128): CanvasTexture {
+  return texturaCanvas(lado, (ctx, l) => {
     const g = ctx.createRadialGradient(l / 2, l / 2, 0, l / 2, l / 2, l / 2);
     g.addColorStop(0, "rgba(255,255,255,1)");
     g.addColorStop(0.18, cor);
@@ -201,8 +263,8 @@ function texturaBrilho(cor: string): CanvasTexture {
 }
 
 /** Estrela de 4 pontas (mesmo desenho do cubo central do 2D). */
-function texturaEstrela4(): CanvasTexture {
-  return texturaCanvas(128, (ctx, l) => {
+function texturaEstrela4(lado = 128): CanvasTexture {
+  return texturaCanvas(lado, (ctx, l) => {
     const c = l / 2;
     const halo = ctx.createRadialGradient(c, c, 0, c, c, c);
     halo.addColorStop(0, "rgba(255,230,150,0.55)");
@@ -223,8 +285,8 @@ function texturaEstrela4(): CanvasTexture {
 }
 
 /** Máscara (no alfa) do halo da estrela viajante. */
-function texturaHaloEstrela(): CanvasTexture {
-  return texturaCanvas(128, (ctx, l) => {
+function texturaHaloEstrela(lado = 128): CanvasTexture {
+  return texturaCanvas(lado, (ctx, l) => {
     const c = l / 2;
     const g = ctx.createRadialGradient(c, c, 0, c, c, c);
     g.addColorStop(0, "rgba(255,255,255,1)");
@@ -238,8 +300,8 @@ function texturaHaloEstrela(): CanvasTexture {
 }
 
 /** Máscara (no alfa) dos raios em cruz: dois losangos finos com gradiente radial. */
-function texturaRaios(): CanvasTexture {
-  return texturaCanvas(256, (ctx, l) => {
+function texturaRaios(lado = 256): CanvasTexture {
+  return texturaCanvas(lado, (ctx, l) => {
     const c = l / 2;
     const g = ctx.createRadialGradient(c, c, 0, c, c, c);
     g.addColorStop(0, "rgba(255,255,255,1)");
@@ -288,6 +350,11 @@ const FRAG_PONTOS = /* glsl */ `
     float a = smoothstep(0.5, 0.0, d);
     a = a * a * (0.35 + 0.65 * vBrilho);
     gl_FragColor = vec4(vCor * a, a);
+    #ifdef COR_CORRETA
+    // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
+    float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
+    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #endif
   }
 `;
 
@@ -319,6 +386,11 @@ const FRAG_FITA = /* glsl */ `
     float pontas = smoothstep(0.0, 0.12, vAo) * smoothstep(1.0, 0.85, vAo);
     float a = nucleo * onda * pontas * uOpacidade;
     gl_FragColor = vec4(vCor * a, a);
+    #ifdef COR_CORRETA
+    // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
+    float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
+    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #endif
   }
 `;
 
@@ -353,6 +425,11 @@ const FRAG_ENXAME = /* glsl */ `
     float a = smoothstep(0.5, 0.0, d);
     a = a * a * uAlfa * (0.25 + 0.75 * vM);
     gl_FragColor = vec4(vCor * a, a);
+    #ifdef COR_CORRETA
+    // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
+    float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
+    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #endif
   }
 `;
 
@@ -420,6 +497,11 @@ const FRAG_ESTRELA = /* glsl */ `
     float nucleo = exp(-dot(c, c) * 1500.0);
     vec3 cor = uCor * (halo * 0.95 + raios * uRaiosForca) + vec3(1.0) * (nucleo * 1.6 + halo * halo * 0.55);
     gl_FragColor = vec4(cor * uBrilho * uMestre, 1.0);
+    #ifdef COR_CORRETA
+    // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
+    float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
+    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #endif
   }
 `;
 
@@ -451,6 +533,11 @@ const FRAG_RASTRO = /* glsl */ `
     vec3 cor = mix(uCorCabeca, uCorMeio, smoothstep(0.0, 0.3, vAo));
     cor = mix(cor, uCorCauda, smoothstep(0.3, 1.0, vAo));
     gl_FragColor = vec4(cor * nucleo * desbota * uAlfa * uMestre, 1.0);
+    #ifdef COR_CORRETA
+    // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
+    float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
+    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #endif
   }
 `;
 
@@ -484,6 +571,11 @@ const FRAG_WARP = /* glsl */ `
   varying float vA;
   void main() {
     gl_FragColor = vec4(vCor * vA * uMestre, 1.0);
+    #ifdef COR_CORRETA
+    // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
+    float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
+    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #endif
   }
 `;
 
@@ -528,6 +620,11 @@ const FRAG_LIGACOES = /* glsl */ `
     float a = mix(vA * 0.85, aEstrela, vTipo) * uMestre;
     vec3 cor = mix(vec3(0.62, 0.76, 1.0), vec3(1.0, 0.86, 0.55), vTipo);
     gl_FragColor = vec4(cor * a, 1.0);
+    #ifdef COR_CORRETA
+    // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
+    float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
+    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #endif
   }
 `;
 
@@ -556,6 +653,11 @@ const FRAG_NOS = /* glsl */ `
     float nucleo = smoothstep(0.12, 0.0, d);
     vec3 cor = vec3(1.0, 0.86, 0.55) * a * a + vec3(1.0) * nucleo;
     gl_FragColor = vec4(cor * vA * uMestre, 1.0);
+    #ifdef COR_CORRETA
+    // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
+    float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
+    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #endif
   }
 `;
 
@@ -607,6 +709,11 @@ const FRAG_ANEL = /* glsl */ `
     float luz = (faixaAro * rastro + cabeca * 1.4 + cruz * 0.8) * uAlfaArco;
     vec3 cor = vec3(1.0, 0.86, 0.55) * onda + vec3(1.0, 0.9, 0.62) * luz;
     gl_FragColor = vec4(cor * uMestre, 1.0);
+    #ifdef COR_CORRETA
+    // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
+    float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
+    if (pico > 0.0) gl_FragColor.rgb = linearToOutputTexel(vec4(gl_FragColor.rgb / pico, 1.0)).rgb * pico;
+    #endif
   }
 `;
 
@@ -772,6 +879,8 @@ export class Cena {
   private fatias: Fatia[] = [];
   private fase: Fase = "carregando";
   private leve: boolean;
+  private nivel: NivelQualidade;
+  private perfil: PerfilQualidade;
   private quadro = 0;
   private ultimoT = 0;
   private acumulado = 0;
@@ -804,12 +913,17 @@ export class Cena {
     private store: TotemStore,
     private opcoes: OpcoesCena,
   ) {
-    this.leve = opcoes.leve;
+    this.nivel = opcoes.nivel;
+    this.perfil = PERFIS[opcoes.nivel];
+    this.leve = opcoes.nivel === "leve";
     this.ampAtual = this.leve ? 0 : 1;
     this.durChegada = this.leve ? DUR_CHEGADA_LEVE : DUR_CHEGADA;
-    this.renderer = new WebGLRenderer({ antialias: !this.leve, alpha: false, stencil: false, powerPreference: "high-performance" });
+    this.renderer = new WebGLRenderer({ antialias: this.perfil.antialias, alpha: false, stencil: false, powerPreference: "high-performance" });
     this.renderer.setClearColor(new Color("#0a2248"));
-    this.dprAtual = Math.min(window.devicePixelRatio || 1, this.leve ? 1 : 1.5);
+    this.dprAtual = Math.min(window.devicePixelRatio || 1, this.perfil.dprMax);
+    // teto de pixels: em telas 4K o DPR alto custaria caro demais (nunca abaixo de 1)
+    const pixelsTela = Math.max(1, window.innerWidth * window.innerHeight);
+    this.dprAtual = Math.max(Math.min(1, this.dprAtual), Math.min(this.dprAtual, Math.sqrt(this.perfil.pixelsMax / pixelsTela)));
     this.renderer.setPixelRatio(this.dprAtual);
     this.renderer.domElement.style.width = "100%";
     this.renderer.domElement.style.height = "100%";
@@ -836,7 +950,7 @@ export class Cena {
     this.criarFitas();
 
     // halo atrás da roleta
-    this.matHalo = new MeshBasicMaterial({ map: texturaBrilho("rgba(90,140,255,0.45)"), transparent: true, depthWrite: false, blending: AdditiveBlending });
+    this.matHalo = new MeshBasicMaterial({ map: texturaBrilho("rgba(90,140,255,0.45)", this.perfil.ladoSprite), transparent: true, depthWrite: false, blending: AdditiveBlending });
     this.halo = new Mesh(new PlaneGeometry(R * 4.2, R * 4.2), this.matHalo);
     this.halo.position.z = -0.6;
     this.cena.add(this.halo);
@@ -847,7 +961,7 @@ export class Cena {
 
     this.texturaFace = new CanvasTexture(this.canvasFace);
     this.texturaFace.colorSpace = SRGBColorSpace;
-    this.texturaFace.anisotropy = Math.min(4, this.renderer.capabilities.getMaxAnisotropy());
+    this.texturaFace.anisotropy = Math.min(this.perfil.anisotropia, this.renderer.capabilities.getMaxAnisotropy());
     // transparente (depthWrite continua ligado) e com revelação radial na chegada
     this.uFace = { uMapa: { value: this.texturaFace }, uRaio: { value: 2 }, uBorda: { value: 0 }, uOpacidade: { value: 1 } };
     const matFace = new ShaderMaterial({ uniforms: this.uFace, vertexShader: VERT_FACE, fragmentShader: FRAG_FACE, transparent: true });
@@ -855,9 +969,9 @@ export class Cena {
     this.face.position.z = 0.001;
     this.disco.add(this.face);
 
-    const metal = new MeshMatcapMaterial({ matcap: matcap("#8fa3d0", "#ffffff", "#1c2134") });
-    const ouro = new MeshMatcapMaterial({ matcap: matcap("#ffcf6b", "#fffbe8", "#7a4a12") });
-    const azulEscuro = new MeshMatcapMaterial({ matcap: matcap("#22345f", "#6982b0", "#050a1a") });
+    const metal = new MeshMatcapMaterial({ matcap: matcap("#8fa3d0", "#ffffff", "#1c2134", this.perfil.ladoMatcap) });
+    const ouro = new MeshMatcapMaterial({ matcap: matcap("#ffcf6b", "#fffbe8", "#7a4a12", this.perfil.ladoMatcap) });
+    const azulEscuro = new MeshMatcapMaterial({ matcap: matcap("#22345f", "#6982b0", "#050a1a", this.perfil.ladoMatcap) });
     this.descartaveis.push(metal, ouro, azulEscuro);
 
     this.lateral = new Mesh(new CylinderGeometry(R, R * 0.97, 0.14, 96, 1, true), azulEscuro);
@@ -869,10 +983,10 @@ export class Cena {
     this.fundo.rotation.y = Math.PI;
     this.inclinacao.add(this.fundo);
 
-    this.aro = new Mesh(new TorusGeometry(R * 1.005, 0.035, 12, 120), metal);
+    this.aro = new Mesh(new TorusGeometry(R * 1.005, 0.035, this.leve ? 12 : 24, this.leve ? 120 : 200), metal);
     this.inclinacao.add(this.aro);
 
-    this.pinos = new InstancedMesh(new SphereGeometry(0.028, 10, 8), ouro, MAX_PINOS);
+    this.pinos = new InstancedMesh(new SphereGeometry(0.028, this.leve ? 10 : 20, this.leve ? 8 : 14), ouro, MAX_PINOS);
     this.pinos.count = 0;
     this.disco.add(this.pinos);
 
@@ -880,19 +994,19 @@ export class Cena {
     this.cubo.rotation.x = Math.PI / 2;
     this.cubo.position.z = 0.04;
     this.inclinacao.add(this.cubo);
-    this.anelCubo = new Mesh(new TorusGeometry(0.165, 0.012, 8, 64), metal);
+    this.anelCubo = new Mesh(new TorusGeometry(0.165, 0.012, this.leve ? 8 : 16, this.leve ? 64 : 96), metal);
     this.anelCubo.position.z = 0.08;
     this.inclinacao.add(this.anelCubo);
     this.estrelaCentral = new Mesh(
       new PlaneGeometry(0.3, 0.3),
-      new MeshBasicMaterial({ map: texturaEstrela4(), transparent: true, depthWrite: false }),
+      new MeshBasicMaterial({ map: texturaEstrela4(this.perfil.ladoSprite), transparent: true, depthWrite: false }),
     );
     this.estrelaCentral.position.z = 0.085;
     this.inclinacao.add(this.estrelaCentral);
 
     // brilho especular que NÃO gira (vende o volume)
     this.matBrilho = new MeshBasicMaterial({
-      map: texturaCanvas(256, (ctx, l) => {
+      map: texturaCanvas(Math.max(256, Math.min(1024, this.perfil.ladoSprite)), (ctx, l) => {
         const g = ctx.createRadialGradient(l * 0.34, l * 0.22, 0, l * 0.34, l * 0.22, l * 0.55);
         g.addColorStop(0, "rgba(255,255,255,0.22)");
         g.addColorStop(1, "rgba(255,255,255,0)");
@@ -958,9 +1072,12 @@ export class Cena {
     this.renderer.debug.onShaderError = () => this.falhar("falha ao compilar shader");
     const daViagem: { visible: boolean }[] = [this.estrelaViajante, this.rastro, this.warp, this.ligacoes, this.nosAcesos, this.anel, this.enxame];
     daViagem.forEach((o) => (o.visible = true));
+    // níveis normal/alta: todos os shaders próprios convertem a cor para a saída (sRGB), como a face
+    if (!this.leve) this.ligarCorCorreta();
     this.renderer.compile(this.cena, this.camera);
     this.enxame.visible = false;
     this.aplicarOculta();
+    this.avisarNivel();
     this.quadro = requestAnimationFrame(this.passo);
   }
 
@@ -1222,8 +1339,8 @@ export class Cena {
 
   /** Estrela viajante: 1 quad aditivo, sem teste de profundidade, desenhado por último. */
   private criarEstrelaViajante(): Mesh {
-    const halo = texturaHaloEstrela();
-    const raios = texturaRaios();
+    const halo = texturaHaloEstrela(this.perfil.ladoSprite);
+    const raios = texturaRaios(Math.min(2048, this.perfil.ladoSprite * 2));
     this.uEstrela.uHalo.value = halo;
     this.uEstrela.uRaios.value = raios;
     const m = new ShaderMaterial({
@@ -1480,7 +1597,7 @@ export class Cena {
 
   // ---------- internos ----------
   private redesenharFace = () => {
-    desenharFace(this.canvasFace, this.fatias, this.leve ? 768 : 1024);
+    desenharFace(this.canvasFace, this.fatias, this.perfil.ladoFace);
     this.texturaFace.needsUpdate = true;
     // envia a textura à GPU agora (com a roleta oculta), e não no meio da animação de chegada
     try {
@@ -2219,6 +2336,26 @@ export class Cena {
     if (mudou) attr.needsUpdate = true;
   }
 
+  /** Liga a conversão de cor de saída (COR_CORRETA) em todos os ShaderMaterial da cena. */
+  private ligarCorCorreta() {
+    const ligar = (m: unknown) => {
+      const s = m as ShaderMaterial;
+      if (s && s.isShaderMaterial) s.defines = { ...s.defines, COR_CORRETA: "" };
+    };
+    this.cena.traverse((o) => {
+      const m = (o as Mesh).material;
+      if (Array.isArray(m)) m.forEach(ligar);
+      else ligar(m);
+    });
+    this.descartaveis.forEach(ligar);
+  }
+
+  /** Informa a interface do nível efetivo (o avaliador pode ter baixado a resolução). */
+  private avisarNivel() {
+    const detalhe = `${this.nivel} · DPR ${this.dprAtual.toFixed(2)}`;
+    queueMicrotask(() => window.dispatchEvent(new CustomEvent("roleta:nivel", { detail: detalhe })));
+  }
+
   private falhar(motivo: string) {
     if (this.falhou) return;
     this.falhou = true;
@@ -2244,6 +2381,7 @@ export class Cena {
           // primeiro tenta baixar a resolução; só cai para o 2D se já estiver no mínimo
           if (this.dprAtual > 0.75) {
             this.dprAtual = this.dprAtual > 1 ? 1 : 0.75;
+            this.avisarNivel();
             this.renderer.setPixelRatio(this.dprAtual);
             this.redimensionar();
             this.ema = 0;
@@ -2291,6 +2429,7 @@ export class Cena {
       this.falhar(`desempenho insuficiente (${mediana.toFixed(0)} ms por quadro)`);
     } else if (mediana > limiteReduz && this.dprAtual > 0.75) {
       this.dprAtual = this.dprAtual > 1 ? 1 : 0.75;
+      this.avisarNivel();
       this.renderer.setPixelRatio(this.dprAtual);
       this.redimensionar();
     } else {

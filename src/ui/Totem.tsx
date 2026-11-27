@@ -12,6 +12,9 @@ import { useKiosk } from "./kiosk";
 import { CpfSaindo, Painel } from "./Painel";
 import { PainelTeste } from "./PainelTeste";
 import { ModoPalco, Preferencias, lerPreferencias, salvarPreferencias } from "./preferencias";
+import { Qualidade, proximaQualidade } from "@/palco3d/qualidade";
+
+const QUALIDADES_URL: Qualidade[] = ["auto", "leve", "normal", "alta"];
 import s from "./Totem.module.css";
 
 // O 3D (three.js) só é baixado quando a versão 3D é escolhida.
@@ -40,7 +43,15 @@ interface PropsTotem {
 export default function Totem({ modoInicial, demo = false }: PropsTotem) {
   const [store] = useState(() => new TotemStore(undefined, demo ? OPCOES_DEMO : {}));
   const estado = useSyncExternalStore(store.assinar, store.getEstado, store.getEstado);
-  const [prefs, setPrefs] = useState<Preferencias>({ modo: modoInicial ?? "2d", leve: false });
+  const [prefs, setPrefs] = useState<Preferencias>({ modo: modoInicial ?? "2d", qualidade: "auto" });
+  const leve = prefs.qualidade === "leve";
+  // nível efetivo da cena 3D (o avaliador de desempenho pode rebaixar durante o uso)
+  const [nivelAtivo, setNivelAtivo] = useState<string | null>(null);
+  useEffect(() => {
+    const aoNivel = (e: Event) => setNivelAtivo(String((e as CustomEvent).detail));
+    window.addEventListener("roleta:nivel", aoNivel);
+    return () => window.removeEventListener("roleta:nivel", aoNivel);
+  }, []);
   const [motivo3d, setMotivo3d] = useState<string | null>(null);
   const [admin, setAdmin] = useState(false);
   const celulaRef = useRef<HTMLDivElement>(null);
@@ -50,14 +61,14 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
 
   useEffect(() => {
     // A tela de teste não lê nem grava as preferências do totem real.
-    const p = demo ? { modo: modoInicial ?? "3d", leve: false, salvo: false } : lerPreferencias();
+    const p = demo ? { modo: modoInicial ?? "3d", qualidade: "auto" as Qualidade, salvo: false } : lerPreferencias();
     const q = new URLSearchParams(location.search);
     const modoUrl = q.get("modo");
     // eslint-disable-next-line react-hooks/set-state-in-effect -- preferências só existem no navegador
     setPrefs({
       // prioridade: ?modo= na URL > escolha salva no administrador > rota (/3d/) > 2D
       modo: modoUrl === "2d" || modoUrl === "3d" ? modoUrl : p.salvo ? p.modo : (modoInicial ?? p.modo),
-      leve: q.get("leve") === "1" || p.leve,
+      qualidade: q.get("leve") === "1" ? "leve" : QUALIDADES_URL.includes(q.get("qualidade") as Qualidade) ? (q.get("qualidade") as Qualidade) : p.qualidade,
     });
     void store.iniciar().then(async () => {
       // Demonstração: abre o evento de exemplo sozinho na primeira vez.
@@ -65,7 +76,7 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
     });
   }, [store, modoInicial, demo]);
 
-  useEffect(() => store.definirMovimentoOcioso(!prefs.leve), [store, prefs.leve]);
+  useEffect(() => store.definirMovimentoOcioso(!leve), [store, leve]);
   useEffect(() => {
     som.ativo = estado.evento?.som ?? true;
   }, [estado.evento?.som]);
@@ -183,17 +194,17 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
 
   return (
     <>
-      {modo === "2d" && <CeuFundo leve={prefs.leve} />}
+      {modo === "2d" && <CeuFundo leve={leve} />}
       {modo === "3d" && (
         <GuardaPalco aoFalhar={falhou3d}>
-          <Palco3D store={store} fatias={estado.fatias} fase={estado.fase} leve={prefs.leve} celulaRef={celulaRef} aoFalhar={falhou3d} />
+          <Palco3D store={store} fatias={estado.fatias} fase={estado.fase} qualidade={prefs.qualidade} celulaRef={celulaRef} aoFalhar={falhou3d} />
         </GuardaPalco>
       )}
       <main
         className={`${s.totem} ${modo === "3d" ? s.modo3d : ""} ${comRoleta ? "" : s.semRoleta} ${aguardandoRoleta ? s.aguardando : ""}`}
       >
         <div ref={celulaRef} className={s.celula} data-roleta>
-          {modo === "2d" && <Palco2D store={store} fatias={estado.fatias} fase={estado.fase} leve={prefs.leve} />}
+          {modo === "2d" && <Palco2D store={store} fatias={estado.fatias} fase={estado.fase} leve={leve} />}
         </div>
         <div className={s.lado}>
           <Painel
@@ -214,11 +225,12 @@ export default function Totem({ modoInicial, demo = false }: PropsTotem) {
           store={store}
           estado={estado}
           modo={modo}
-          leve={prefs.leve}
+          qualidade={prefs.qualidade}
           motivo3d={motivo3d}
+          nivelAtivo={nivelAtivo}
           aguardandoRoleta={aguardandoRoleta}
           alternarModo={() => mudarPrefs({ ...prefs, modo: modo === "3d" ? "2d" : "3d" })}
-          alternarLeve={() => mudarPrefs({ ...prefs, leve: !prefs.leve })}
+          alternarQualidade={() => mudarPrefs({ ...prefs, qualidade: proximaQualidade(prefs.qualidade) })}
         />
       )}
       {admin && <Admin store={store} estado={estado} prefs={prefs} mudarPrefs={mudarPrefs} motivo3d={motivo3d} fechar={fecharAdmin} />}

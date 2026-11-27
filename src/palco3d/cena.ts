@@ -139,8 +139,8 @@ const SIN_INC = Math.sin(INCLINACAO_ATIVA);
 // ---------- roteiro da chegada (segundos do roteiro base de 8 s; a duração real comprime) ----------
 const DUR_CHEGADA = 5; // entrada "estrela"
 const DUR_CHEGADA_LEVE = 3.5;
-const DUR_CHEGADA_CAD = 6; // entrada "cadentes" (viagem + revoada)
-const DUR_CHEGADA_CAD_LEVE = 4;
+const DUR_CHEGADA_CAD = 4.5; // entrada "cadentes" (viagem + revoada)
+const DUR_CHEGADA_CAD_LEVE = 3.2;
 const T_PARTIDA = 0.8; // fim do nascimento, a estrela parte
 const T_POUSO = 6.6; // a estrela para no centro da roleta: supernova
 const T_FIM = 8;

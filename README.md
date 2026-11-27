@@ -8,7 +8,7 @@ Quando o CPF é confirmado:
 
 - **3D**, com duas entradas (Administrador > **Entrada 3D**, ou `?entrada=`):
   - **Estrelas cadentes (padrão, ~4,5 s; ~3,2 s no leve):** a câmera **viaja pelo espaço** junto com uma
-    revoada de estrelas cadentes nas **cores da logo** (riscos de velocidade, constelações passando,
+    revoada de **9 estrelas cadentes, uma para cada cor da logo** (riscos de velocidade, constelações passando,
     acendendo e se ligando às cadentes). No fim a câmera se afasta, as cadentes fecham uma espiral e,
     ao se juntarem, **formam a roleta** (flash, onda de choque, face revelada de dentro para fora,
     aro acendendo nas cores da logo, pinos, ponteiro caindo).

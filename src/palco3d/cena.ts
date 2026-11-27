@@ -1496,7 +1496,8 @@ export class Cena {
     CORES_LOGO.forEach((hex, i) => corLogo(hex, cTmp).toArray(cores, i * 3));
 
     // ---------- estrelas cadentes (entrada e explosão do resultado) ----------
-    this.nCad = this.leve ? 10 : this.nivel === "alta" ? 24 : 18;
+    // uma cadente por cor da logo (na ordem de CORES_LOGO), em todos os níveis
+    this.nCad = N_CORES_LOGO;
     this.nRastroCad = this.leve ? 14 : 22;
     this.cadParam = new Float32Array(this.nCad * NP);
     this.cadAmostras = new Float32Array(this.nRastroCad * 3);

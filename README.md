@@ -22,6 +22,9 @@ Quando o CPF é confirmado:
     e *Fanfarra*. Trocar o som já toca o novo; o botão **▶ Ouvir som** repete.
   - **Fundo do espaço:** nebulosas nas cores da paleta/logo e a Via Láctea (com faixas de poeira),
     geradas uma vez na GPU ao abrir (`src/palco3d/ceu.ts`), mais estrelinhas concentradas na faixa.
+    As constelações têm linhas finas e suaves (com um brilho que corre por elas) e estrelas com
+    raios em cruz; as fitas coloridas são faixas de seda com núcleo, fios e pulsos de luz; e de vez
+    em quando uma **estrela cadente** cruza o fundo (`src/palco3d/enfeites.ts`).
   - **Toque na tela para pular.**
 - **2D:** o cartão "descola" da tela e a roleta "levanta" em perspectiva via CSS (~1,3 s).
 

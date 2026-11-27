@@ -72,7 +72,6 @@ import {
   DynamicDrawUsage,
   Group,
   InstancedMesh,
-  LineBasicMaterial,
   LineSegments,
   Matrix4,
   Mesh,
@@ -103,6 +102,7 @@ import { RenderPass } from "three/examples/jsm/postprocessing/RenderPass.js";
 import { UnrealBloomPass } from "three/examples/jsm/postprocessing/UnrealBloomPass.js";
 import { PERFIS, type NivelQualidade, type PerfilQualidade } from "./qualidade";
 import { NORMAL_BANDA, criarCeu, type Ceu } from "./ceu";
+import { Meteoros, criarLinhasConstelacao, materialNos } from "./enfeites";
 import { desenharFace } from "@/arte/face";
 import { LUZES, familiaCanvasTitulo } from "@/arte/paleta";
 import { Fatia, TAU, anguloAtual, fatiaSobPonteiro, modPositivo } from "@/core/geometria";
@@ -505,13 +505,16 @@ const VERT_FITA = /* glsl */ `
   attribute float aLado;
   attribute float aAo;
   attribute vec3 aCor;
+  attribute float aFace;
   varying float vLado;
   varying float vAo;
   varying vec3 vCor;
+  varying float vFace;
   void main() {
     vLado = aLado;
     vAo = aAo;
     vCor = aCor;
+    vFace = aFace;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
 `;
@@ -522,13 +525,20 @@ const FRAG_FITA = /* glsl */ `
   varying float vLado;
   varying float vAo;
   varying vec3 vCor;
+  varying float vFace;
   void main() {
+    // fita de seda: núcleo fino e quente, corpo suave, fios finos ao longo e pulsos de luz que
+    // correm por ela; mais clara onde a fita "vira" de frente (vFace), mais fina de lado
     float b = 1.0 - abs(vLado);
-    float nucleo = pow(b, 8.0) * 1.3 + pow(b, 1.6) * 0.32;
-    float onda = 0.65 + 0.35 * sin(vAo * 16.0 - uTempo * 1.1);
-    float pontas = smoothstep(0.0, 0.12, vAo) * smoothstep(1.0, 0.85, vAo);
-    float a = nucleo * onda * pontas * uOpacidade;
-    gl_FragColor = vec4(vCor * a, a);
+    float nucleo = pow(b, 16.0) * 1.25;
+    float corpo = pow(b, 2.4) * 0.3 + pow(b, 6.0) * 0.25;
+    float fios = (0.5 + 0.5 * cos(vLado * 22.0 + vAo * 30.0)) * pow(b, 1.4) * 0.16 * vFace;
+    float onda = 0.72 + 0.28 * sin(vAo * 14.0 - uTempo * 1.1);
+    float pulso = pow(max(0.0, sin(vAo * 7.0 - uTempo * 0.8)), 30.0) * pow(b, 3.0);
+    float pontas = smoothstep(0.0, 0.14, vAo) * smoothstep(1.0, 0.84, vAo);
+    float a = ((nucleo + corpo + fios) * onda * (0.55 + 0.45 * vFace) + pulso * 0.9) * pontas * uOpacidade;
+    vec3 cor = mix(vCor, vec3(1.0), clamp(nucleo * 0.45 + pulso * 0.5, 0.0, 0.75));
+    gl_FragColor = vec4(cor * a, a);
     #ifdef COR_CORRETA
     // converte só o TOM para a saída (sRGB); a intensidade (queda do brilho) fica como foi ajustada
     float pico = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
@@ -1119,7 +1129,9 @@ export class Cena {
   private enxame: Points;
   private faiscas: Points;
   private poolFaiscas: Faisca[] = [];
-  private uniformesComuns = { uTempo: { value: 0 }, uEscala: { value: 400 } };
+  private uniformesComuns = { uTempo: { value: 0 }, uEscala: { value: 400 }, uResolucao: { value: new Vector2(1, 1) }, uDpr: { value: 1 } };
+  /** estrelas cadentes de fundo (de vez em quando) */
+  private meteoros: Meteoros;
   private matFita: ShaderMaterial;
   private matEnxame: ShaderMaterial;
   private descartaveis: { dispose: () => void }[] = [];
@@ -1367,6 +1379,9 @@ export class Cena {
       console.warn("Céu com nebulosas indisponível; seguindo com a cor de fundo.", e);
     }
     this.estrelas = this.criarEstrelas();
+    this.meteoros = new Meteoros(this.leve ? 2 : 3, this.leve ? [5, 10] : [2.2, 5.5], CORES_LOGO.map((h) => corLogo(h)));
+    this.cena.add(this.meteoros.malha);
+    this.descartaveis.push({ dispose: () => this.meteoros.descartar() });
     this.cena.add(this.estrelas);
     this.cena.add(this.criarConstelacoes());
     this.matFita = new ShaderMaterial({
@@ -1721,55 +1736,53 @@ export class Cena {
   private criarConstelacoes(): Group {
     const rnd = gerador(29);
     const grupo = new Group();
-    const linhas: number[] = [];
     const nos: number[] = [];
+    const vertices: Vector3[] = [];
+    const segmentos: [number, number][] = [];
     const centros = [
       [-3.2, 1.6, -6], [3.4, 1.9, -7], [-3.6, -1.7, -6.5], [3.1, -1.8, -6], [0.4, 2.6, -9],
     ];
     for (const [cx, cy, cz] of centros) {
-      let ant: number[] | null = null;
+      let ant = -1;
       const q = 4 + Math.floor(rnd() * 3);
       const nosGrupo: Vector3[] = [];
       const centro = new Vector3();
       for (let k = 0; k < q; k++) {
         const p = [cx + (rnd() - 0.5) * 2.2, cy + (rnd() - 0.5) * 1.6, cz + (rnd() - 0.5)];
         nos.push(...p);
-        if (ant) linhas.push(...ant, ...p);
-        ant = p;
         const v = new Vector3(p[0], p[1], p[2]);
+        vertices.push(v);
+        if (ant >= 0) segmentos.push([ant, vertices.length - 1]);
+        ant = vertices.length - 1;
         nosGrupo.push(v);
         centro.add(v);
       }
       this.gruposConst.push({ centro: centro.divideScalar(q), nos: nosGrupo, dMin: Infinity, ativo: false, memoria: 0 });
     }
-    const gl = new BufferGeometry();
-    gl.setAttribute("position", new BufferAttribute(new Float32Array(linhas), 3));
-    const ml = new LineBasicMaterial({ color: "#a9bbea", transparent: true, opacity: 0.28, depthWrite: false });
-    grupo.add(new LineSegments(gl, ml));
     const n = nos.length / 3;
     const gn = new BufferGeometry();
     gn.setAttribute("position", new BufferAttribute(new Float32Array(nos), 3));
-    const tam = new Float32Array(n).map((_, i) => 0.35 + (i % 3) * 0.12);
+    // maiores que antes: o ponto agora tem halo e raios em cruz em volta do núcleo
+    const tam = new Float32Array(n).map((_, i) => 0.62 + (i % 3) * 0.22);
     const fase = new Float32Array(n).map(() => rnd());
     const cor = new Float32Array(n * 3);
     const c = new Color();
+    const coresNos: Color[] = [];
     for (let i = 0; i < n; i++) {
       c.set(LUZES[i % LUZES.length]).lerp(new Color("#ffffff"), 0.45);
       cor.set([c.r, c.g, c.b], i * 3);
+      coresNos.push(c.clone().lerp(new Color("#a9bbea"), 0.5));
     }
+    const linhas = criarLinhasConstelacao(vertices, coresNos, segmentos, this.uniformesComuns);
+    grupo.add(linhas);
     gn.setAttribute("aTam", new BufferAttribute(tam, 1));
     gn.setAttribute("aFase", new BufferAttribute(fase, 1));
     gn.setAttribute("aCor", new BufferAttribute(cor, 3));
-    const mn = new ShaderMaterial({
-      uniforms: this.uniformesComuns,
-      vertexShader: VERT_PONTOS,
-      fragmentShader: FRAG_PONTOS,
-      transparent: true,
-      depthWrite: false,
-      blending: AdditiveBlending,
-    });
-    grupo.add(new Points(gn, mn));
-    this.descartaveis.push(gl, ml, gn, mn);
+    const mn = materialNos(this.uniformesComuns);
+    const pontos = new Points(gn, mn);
+    pontos.frustumCulled = false;
+    grupo.add(pontos);
+    this.descartaveis.push(linhas.geometry, linhas.material as ShaderMaterial, gn, mn);
     return grupo;
   }
 
@@ -1784,8 +1797,9 @@ export class Cena {
     if (this.leve) defs.splice(2, 1);
     defs.forEach((d, idx) => {
       const curva = new CatmullRomCurve3(d.pts.map(([x, y, z]) => new Vector3(x, y, z)));
-      const n = 140;
+      const n = this.leve ? 140 : 360;
       const pos = new Float32Array(n * 2 * 3);
+      const face = new Float32Array(n * 2);
       const lado = new Float32Array(n * 2);
       const ao = new Float32Array(n * 2);
       const cor = new Float32Array(n * 2 * 3);
@@ -1798,13 +1812,16 @@ export class Cena {
         const p = curva.getPointAt(t);
         const tan = curva.getTangentAt(t);
         const s = new Vector3().crossVectors(tan, frente).normalize();
-        const w = d.largura * (0.45 + 0.55 * Math.abs(Math.sin(t * Math.PI * 2.4 + idx)));
+        // a fita torce: larga quando está de frente, fina quando vira de lado
+        const giro = Math.abs(Math.sin(t * Math.PI * 2.4 + idx));
+        const w = d.largura * (0.4 + 0.6 * giro);
         c.copy(ca).lerp(cb, t);
         for (let k = 0; k < 2; k++) {
           const sinal = k === 0 ? -1 : 1;
           const j = i * 2 + k;
           pos.set([p.x + s.x * w * sinal, p.y + s.y * w * sinal, p.z + s.z * w * sinal], j * 3);
           lado[j] = sinal;
+          face[j] = giro;
           ao[j] = t;
           cor.set([c.r, c.g, c.b], j * 3);
         }
@@ -1818,6 +1835,7 @@ export class Cena {
       g.setAttribute("position", new BufferAttribute(pos, 3));
       g.setAttribute("aLado", new BufferAttribute(lado, 1));
       g.setAttribute("aAo", new BufferAttribute(ao, 1));
+      g.setAttribute("aFace", new BufferAttribute(face, 1));
       g.setAttribute("aCor", new BufferAttribute(cor, 3));
       g.setIndex(indices);
       this.descartaveis.push(g);
@@ -2274,6 +2292,8 @@ export class Cena {
     this.composer?.setSize(w, h);
     this.camera.aspect = w / h;
     this.uniformesComuns.uEscala.value = h * this.dprAtual * 0.9;
+    this.uniformesComuns.uResolucao.value.set(w * this.dprAtual, h * this.dprAtual);
+    this.uniformesComuns.uDpr.value = this.dprAtual;
   };
 
   private moverPonteiro = (e: PointerEvent) => {
@@ -3760,6 +3780,8 @@ export class Cena {
     if (this.tCelebra >= 0) this.aplicarCelebracao(dt);
     this.atualizarFaiscas(dt);
     this.ceu?.seguir(this.camera.position);
+    // cadentes de fundo: não competem com a entrada (as ativas terminam)
+    this.meteoros.atualizar(dt, this.camera, this.modoRevelacao !== "chegando");
     if (this.composer) this.composer.render();
     else this.renderer.render(this.cena, this.camera);
     this.avaliarDesempenho(dtMs, agora);

@@ -6,19 +6,22 @@ feita para rodar numa **tela touch** (totem) em um PC desconhecido, **sem intern
 **Fluxo do participante:** a tela inicial mostra só o campo de CPF (com teclado numérico na tela).
 Quando o CPF é confirmado:
 
-- **3D (~5 s, ~3,5 s no modo leve)**, com duas entradas (Administrador > **Entrada 3D**, ou `?entrada=`):
-  - **Estrelas cadentes (padrão):** estrelas nas **cores da logo** cruzam o espaço com rastros
-    coloridos, entram numa espiral e, ao se juntarem, **formam a roleta** (flash, onda de choque,
-    face revelada de dentro para fora, aro acendendo nas cores da logo, pinos, ponteiro caindo).
-  - **Estrela viajante:** o cartão do CPF vira uma estrela que viaja pelo espaço (rastro, riscos de
-    velocidade, constelações se ligando), explode numa supernova e vira a roleta.
+- **3D**, com duas entradas (Administrador > **Entrada 3D**, ou `?entrada=`):
+  - **Estrelas cadentes (padrão, ~6 s; ~4 s no leve):** a câmera **viaja pelo espaço** junto com uma
+    revoada de estrelas cadentes nas **cores da logo** (riscos de velocidade, constelações passando,
+    acendendo e se ligando às cadentes). No fim a câmera se afasta, as cadentes fecham uma espiral e,
+    ao se juntarem, **formam a roleta** (flash, onda de choque, face revelada de dentro para fora,
+    aro acendendo nas cores da logo, pinos, ponteiro caindo).
+  - **Estrela viajante (~5 s; ~3,5 s no leve):** o cartão do CPF vira uma estrela que viaja pelo
+    espaço, explode numa supernova e vira a roleta.
   - No instante em que a roleta se forma toca um **som** sintetizado (whoosh + acorde + cintilar).
   - **Toque na tela para pular.**
 - **2D:** o cartão "descola" da tela e a roleta "levanta" em perspectiva via CSS (~1,3 s).
 
 **Girar:** não há botão — o participante **arrasta a roleta com o dedo** e solta (um lance rápido ou
 um arrasto de ~1/10 de volta). Ao parar, a **fatia vencedora acende**, o ponteiro pulsa e uma
-explosão de estrelas cadentes nas cores da logo sai do ponteiro. Depois do resultado, volta para a tela de CPF.
+explosão de estrelas cadentes nas cores da logo sai do ponteiro. O **centro da roleta é a logo da empresa** num medalhão claro (`public/marca/logo-oncologygroup.webp`),
+no 2D e no 3D. Depois do resultado, volta para a tela de CPF.
 
 - **Versão 2D com detalhes 3D** (`/`): roleta em canvas com perspectiva, espessura, aro metálico, brilho e céu da identidade visual. Leve: só anima `transform`.
 - **Versão 3D interativa** (`/3d/`): three.js; a roleta "descola" da tela e ganha volume, câmera viva com parallax, agarrar-e-lançar com o dedo, faíscas ao tocar o céu e revelação com estrelas que formam uma estrela. Se o PC não aguentar, cai sozinha para o 2D sem perder nada.

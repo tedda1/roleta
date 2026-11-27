@@ -123,7 +123,9 @@ export default function Palco2D({ store, fatias, fase, leve }: Props) {
         <div className={s.brilho} />
         <div className={s.pulso} />
         <div className={s.cubo}>
-          <span className={s.estrela} />
+          {/* medalhão com a logo da empresa no centro da roleta */}
+          {/* eslint-disable-next-line @next/next/no-img-element -- export estático, imagem local pequena */}
+          <img className={s.logo} src="/marca/logo-oncologygroup.webp" alt="" draggable={false} />
         </div>
         <div ref={ponteiroRef} className={s.ponteiro}>
           <span className={s.cristal} />

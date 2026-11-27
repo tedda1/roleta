@@ -6,15 +6,29 @@
  * Orçamento: ~16 draw calls, < 20k triângulos, sem luzes (Basic/Matcap/shaders simples),
  * DPR ≤ 1,5, brilho por sprites aditivos. O resultado NUNCA é decidido aqui.
  *
- * Duas entradas (OpcoesCena.entrada), as duas com ~5 s (~3,5 s no modo leve) e o mesmo roteiro
- * base de 8 s ("tau"), comprimido pela duração real; a formação da roleta (tau 6,6 → 8) é comum.
+ * Duas entradas (OpcoesCena.entrada) com o mesmo roteiro base de 8 s ("tau"), comprimido pela
+ * duração real: "cadentes" ~6 s (~4 s no leve), "estrela" ~5 s (~3,5 s no leve). As duas usam a
+ * mesma viagem (curva CatmullRom, câmera de perseguição, riscos de warp, constelações) e a mesma
+ * formação da roleta (tau 6,6 → 8).
  *
- * Entrada "cadentes" (padrão): estrelas cadentes nas cores da logo vêm de direções diferentes
- * (por trás da câmera, do fundo do céu e dos lados), com rastros coloridos e trajetórias curvas
- * (Hermite), enquanto a câmera recua e volta ao enquadramento; ao chegar, cada uma entra numa
- * espiral horária em volta do centro e todas se juntam no centro (tau 6,6): flash, onda de
- * choque e a formação; o arco que percorre o aro passa pelas cores da logo. 2 draw calls para
- * todas as cadentes (faixas dos rastros + cabeças), arrays pré-alocados.
+ * Entrada "cadentes" (padrão), a viagem com as estrelas cadentes nas cores da logo:
+ *  1. NASCIMENTO (tau 0–0,8): do centro da tela (onde estava o cartão do CPF) brota um ponto de
+ *     luz e dele se abre, em leque, uma revoada de cadentes coloridas.
+ *  2. VIAGEM (tau 0,8–5,3): um "líder" invisível percorre a curva e a câmera o persegue; as
+ *     cadentes voam em formação ao lado e à frente da câmera (deslocamentos no referencial da
+ *     curva, com ondulação própria), com rastros coloridos. Riscos de warp, fitas e
+ *     constelações passam; as constelações acendem quando a revoada passa perto e cada uma se
+ *     liga por linhas de luz a uma cadente.
+ *  3. CHEGADA (tau ~4,7–6,6): o líder freia rumo ao centro da roleta e a câmera se afasta até o
+ *     enquadramento final; cada cadente troca a formação por uma espiral horária em volta do
+ *     líder (no plano do disco), que se fecha no centro em tau 6,6.
+ *  4. FORMAÇÃO: flash, onda de choque, face revelada, arco do aro nas cores da logo, pinos, o
+ *     medalhão com a logo nasce onde elas se juntaram e o ponteiro cai.
+ * 2 draw calls para todas as cadentes (faixas dos rastros + cabeças), arrays pré-alocados; o
+ * referencial do líder é calculado uma vez por amostra de rastro e serve a todas.
+ *
+ * Centro da roleta: MEDALHÃO (disco perolado + anel dourado + logo da empresa por cima, sem luz).
+ * A logo vem de /marca/logo-oncologygroup.webp; se faltar, fica só o medalhão.
  *
  * Entrada "estrela" (estrela viajante), "Constelação: a nossa força é brilhar juntos" — cada
  * estrela é uma pessoa, cada conexão uma parceria:
@@ -29,9 +43,9 @@
  *  4. TRANSFORMAÇÃO: supernova curta (flash + onda de choque no plano do disco); a face se
  *     revela de dentro para fora com borda luminosa, um arco de luz percorre o aro, os pinos
  *     surgem como pequenas estrelas, o cubo nasce onde a estrela parou e o ponteiro cai.
- * Tocar a tela durante a chegada pula para o pouso (~0,75 s: na estrela a viagem se apaga onde
- * está, a câmera sai da perseguição em tempo real e a supernova segue; nas cadentes o roteiro
- * corre acelerado até a espiral final e a formação segue). No instante em que a roleta se forma
+ * Tocar a tela durante a chegada pula para o pouso (~0,75 s, igual nas duas entradas: a viagem
+ * se apaga onde está, a câmera sai da perseguição em tempo real, o roteiro salta para o fim da
+ * espiral/pouso e a formação segue). No instante em que a roleta se forma
  * (flash) a cena dispara `roleta:formou` (uma vez por chegada animada; a interface toca o som).
  * Ao terminar (ou quando a roleta é mostrada direto) dispara `roleta:chegada-concluida`.
  * Sem roleta (atração/CPF), nada dela é desenhado.
@@ -51,6 +65,7 @@ import {
   CircleGeometry,
   Color,
   CylinderGeometry,
+  DataTexture,
   DoubleSide,
   DynamicDrawUsage,
   Group,
@@ -69,6 +84,8 @@ import {
   Scene,
   ShaderMaterial,
   SphereGeometry,
+  Texture,
+  TextureLoader,
   TorusGeometry,
   Vector3,
   WebGLRenderer,
@@ -120,8 +137,10 @@ const COS_INC = Math.cos(INCLINACAO_ATIVA);
 const SIN_INC = Math.sin(INCLINACAO_ATIVA);
 
 // ---------- roteiro da chegada (segundos do roteiro base de 8 s; a duração real comprime) ----------
-const DUR_CHEGADA = 5;
+const DUR_CHEGADA = 5; // entrada "estrela"
 const DUR_CHEGADA_LEVE = 3.5;
+const DUR_CHEGADA_CAD = 6; // entrada "cadentes" (viagem + revoada)
+const DUR_CHEGADA_CAD_LEVE = 4;
 const T_PARTIDA = 0.8; // fim do nascimento, a estrela parte
 const T_POUSO = 6.6; // a estrela para no centro da roleta: supernova
 const T_FIM = 8;
@@ -134,7 +153,17 @@ const CAIXA_WARP = 22; // lado do cubo de riscos que acompanha a câmera
 const N_GRUPOS = 5; // constelações do céu (criarConstelacoes)
 const GRUPOS_ACESOS = 3;
 const MAX_AMOSTRAS = 90; // janela da avaliação de desempenho (quadros)
-const Z_CENTRO = 0.085; // estrelaCentral.position.z: onde a estrela viajante/as cadentes se juntam
+const Z_CENTRO = 0.085; // centro do medalhão: onde a estrela viajante/as cadentes se juntam
+
+// ---------- medalhão do centro (logo da empresa) ----------
+const URL_LOGO = "/marca/logo-oncologygroup.webp";
+const PROPORCAO_LOGO = 1009 / 2000; // altura / largura do arquivo
+const R_MEDALHAO = 0.2; // os rótulos da face começam em 0,24
+const Z_MEDALHAO = 0.08; // topo do cubo
+const LARGURA_LOGO = 0.8; // fração do diâmetro do disco ocupada pela logo
+/** Com bloom (cena linear, limiar BLOOM_LIMIAR): o disco claro fica logo abaixo do limiar. */
+const BRILHO_DISCO_BLOOM = 0.74;
+const BRILHO_LOGO_BLOOM = 0.88;
 
 // ---------- estrelas cadentes (entrada e explosão do resultado) ----------
 /** Cores da logo, na ordem do arco do aro; as escuras são clareadas (corLogo) para o fundo escuro. */
@@ -142,10 +171,13 @@ const CORES_LOGO = ["#0a8fd6", "#e98300", "#a873a8", "#009a8e", "#4fb3b5", "#76b
 const N_CORES_LOGO = CORES_LOGO.length;
 /** Parâmetros por cadente (Float32Array, passo NP): ver prepararCadentes/prepararExplosao. */
 const NP = 20;
-const P_P0 = 0; // entrada: ponto de partida (mundo) | explosão: origem
-const P_T0 = 3; // entrada: velocidade inicial (u por s do roteiro) | explosão: velocidade (u/s)
-const P_E = 6; // entrada: ponto de entrada na espiral | explosão: vetor de curva (u/s²)
-const P_TE = 9; // entrada: velocidade de entrada na espiral (u por s do roteiro)
+const P_OF = 0; // entrada: deslocamento na revoada (lado, cima, frente no referencial do líder)
+const P_OA = 3; // entrada: amplitude da ondulação de cada eixo
+const P_OFASE = 6; // entrada: fase da ondulação de cada eixo
+const P_OW = 9; // entrada: frequência da ondulação (rad por s do roteiro)
+const P_P0 = 0; // explosão: origem
+const P_T0 = 3; // explosão: velocidade (u/s)
+const P_E = 6; // explosão: vetor de curva (u/s²)
 const P_T_INI = 12; // instante em que aparece (roteiro | s reais)
 const P_T_ESP = 13; // entrada: instante em que entra na espiral | explosão: duração da vida
 const P_R_E = 14; // entrada: raio da espiral na entrada
@@ -154,15 +186,12 @@ const P_H0 = 16; // entrada: altura acima do disco na entrada
 /** Espiral: ângulo percorrido = ESP_A·k + ESP_B·k² (k = 0..1), ~1,75 volta acelerando. */
 const ESP_A = 5;
 const ESP_B = 6;
-const LAG_RASTRO_CAD = 0.55; // s do roteiro cobertos pelo rastro de cada cadente na entrada
+/** s do roteiro antes da entrada na espiral em que a revoada começa a virar espiral. */
+const MISTURA_ESP = 0.6;
+const LAG_RASTRO_CAD = 0.22; // s do roteiro cobertos pelo rastro de cada cadente na entrada
 const LAG_RASTRO_EXP = 0.3; // s reais cobertos pelo rastro na explosão do resultado
-/** Câmera viva da entrada cadentes: recua, gira um pouco e volta (amortecida em tempo real). */
-const CAM_CAD_DIST = 0.28;
-const CAM_CAD_AZ = 0.16;
-const CAM_CAD_EL = 0.08;
-const K_CAM_CAD = 4;
-/** Pulo/giro nas cadentes: fração do tempo restante gasta correndo até a espiral final. */
-const FRACAO_CORRIDA = 0.4;
+/** Referencial do líder por amostra de rastro: posição, lado, cima, frente (12 floats). */
+const NQ = 12;
 
 // ---------- celebração ao parar (s reais) ----------
 const DUR_CELEBRA = 3;
@@ -218,6 +247,15 @@ function outBounce(k: number): number {
   }
   const x = k - 2.625 / d1;
   return n1 * x * x + 0.984375;
+}
+
+/** Posição (0..1, por comprimento de arco) da viagem no instante tau: trapézio acelera/cruza/freia. */
+function sDoRoteiro(tau: number): number {
+  const k = faixa(tau, T_PARTIDA, T_POUSO);
+  if (k < ACEL) return (VMAX * k * k) / (2 * ACEL);
+  if (k < 1 - FREIO) return saturar(VMAX * (ACEL / 2 + k - ACEL));
+  const r = 1 - k;
+  return saturar(1 - (VMAX * r * r) / (2 * FREIO));
 }
 
 export type EntradaCena = "cadentes" | "estrela";
@@ -343,25 +381,32 @@ function texturaBrilho(cor: string, lado = 128): CanvasTexture {
   });
 }
 
-/** Estrela de 4 pontas (mesmo desenho do cubo central do 2D). */
-function texturaEstrela4(lado = 128): CanvasTexture {
+/**
+ * Disco do medalhão: branco perolado com degradê suave (luz no alto à esquerda, borda um pouco
+ * mais fechada) e um leve furta-cor; claro o bastante para o azul-marinho e o vermelho da logo
+ * aparecerem, sem chegar ao branco puro.
+ */
+function texturaPerola(lado = 256): CanvasTexture {
   return texturaCanvas(lado, (ctx, l) => {
     const c = l / 2;
-    const halo = ctx.createRadialGradient(c, c, 0, c, c, c);
-    halo.addColorStop(0, "rgba(255,230,150,0.55)");
-    halo.addColorStop(1, "rgba(255,210,63,0)");
-    ctx.fillStyle = halo;
-    ctx.fillRect(0, 0, l, l);
-    const g = ctx.createRadialGradient(c, c, 0, c, c, c * 0.8);
-    g.addColorStop(0, "#ffffff");
-    g.addColorStop(0.35, "#fff4d6");
-    g.addColorStop(1, "#ffd23f");
+    const g = ctx.createRadialGradient(c * 0.72, c * 0.6, l * 0.02, c, c, c);
+    g.addColorStop(0, "#fbfaf7");
+    g.addColorStop(0.55, "#f1eee8");
+    g.addColorStop(0.88, "#e2ddd6");
+    g.addColorStop(1, "#cfc9c2");
     ctx.fillStyle = g;
-    ctx.beginPath();
-    const pts: [number, number][] = [[0.5, 0.08], [0.58, 0.42], [0.92, 0.5], [0.58, 0.58], [0.5, 0.92], [0.42, 0.58], [0.08, 0.5], [0.42, 0.42]];
-    pts.forEach(([x, y], i) => (i ? ctx.lineTo(x * l, y * l) : ctx.moveTo(x * l, y * l)));
-    ctx.closePath();
-    ctx.fill();
+    ctx.fillRect(0, 0, l, l);
+    // furta-cor de pérola: rosado embaixo à direita, azulado em cima, bem suaves
+    const rosa = ctx.createRadialGradient(c * 1.45, c * 1.5, 0, c * 1.45, c * 1.5, c * 0.9);
+    rosa.addColorStop(0, "rgba(240,205,215,0.35)");
+    rosa.addColorStop(1, "rgba(240,205,215,0)");
+    ctx.fillStyle = rosa;
+    ctx.fillRect(0, 0, l, l);
+    const azul = ctx.createRadialGradient(c * 1.3, c * 0.45, 0, c * 1.3, c * 0.45, c * 0.7);
+    azul.addColorStop(0, "rgba(200,220,240,0.3)");
+    azul.addColorStop(1, "rgba(200,220,240,0)");
+    ctx.fillStyle = azul;
+    ctx.fillRect(0, 0, l, l);
   });
 }
 
@@ -859,21 +904,29 @@ const GLSL_ACESO = /* glsl */ `
   }
 `;
 
-/** Ligações: linhas do grupo (nó→nó) e da estrela a cada nó (a ponta segue uEstrela). */
+/**
+ * Ligações: linhas do grupo (nó→nó) e de cada nó até o alvo do grupo (a ponta segue uAlvos:
+ * a estrela viajante, ou a cadente que acendeu aquela constelação).
+ */
 const VERT_LIGACOES = /* glsl */ `
   attribute float aPonta;
   attribute float aGrupo;
   attribute float aTipo;
-  uniform vec3 uEstrela;
+  uniform vec3 uAlvos[${N_GRUPOS}];
   ${GLSL_ACESO}
   varying float vA;
   varying float vPonta;
   varying float vTipo;
+  vec3 alvoDe(float g) {
+    vec3 a = vec3(0.0);
+    for (int i = 0; i < ${N_GRUPOS}; i++) a += uAlvos[i] * (1.0 - step(0.5, abs(g - float(i))));
+    return a;
+  }
   void main() {
     vA = acesoDe(aGrupo);
     vPonta = aPonta;
     vTipo = aTipo;
-    vec3 p = mix(position, uEstrela, aPonta);
+    vec3 p = mix(position, alvoDe(aGrupo), aPonta);
     gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
   }
 `;
@@ -1070,7 +1123,12 @@ export class Cena {
   private aro: Mesh;
   private cubo: Mesh;
   private anelCubo: Mesh;
-  private estrelaCentral: Mesh;
+  /** medalhão do centro: disco perolado + logo (o anel dourado é o anelCubo) */
+  private medalhao = new Group();
+  private matDisco: MeshBasicMaterial;
+  private matLogo: MeshBasicMaterial;
+  private logo: Mesh;
+  private logoCarregada = false;
   private brilho: Mesh;
   private matBrilho: MeshBasicMaterial;
   private matrizPino = new Matrix4();
@@ -1114,7 +1172,10 @@ export class Cena {
   private aceso = new Float32Array(N_GRUPOS);
   private ligacoes!: LineSegments;
   private nosAcesos!: Points;
-  private uEstrelaPos = { value: new Vector3() };
+  /** ponta das ligações de cada constelação (estrela viajante ou a cadente escolhida) */
+  private alvosLig: Vector3[] = Array.from({ length: N_GRUPOS }, () => new Vector3());
+  /** cadentes: índice da cadente ligada a cada constelação enquanto ela está acesa (-1 = nenhuma) */
+  private cadDoGrupo = new Int8Array(N_GRUPOS).fill(-1);
   private anel: Mesh;
   private uAnel = {
     uRaioQuad: { value: 1.2 },
@@ -1136,16 +1197,14 @@ export class Cena {
   private nRastroCad: number;
   private cadParam: Float32Array;
   private cadAmostras: Float32Array;
+  /** referencial do líder (NQ floats) em cada instante amostrado pelos rastros (j = 0: agora) */
+  private cadLider: Float32Array;
   private cadCabecas!: Points;
   private cadRastros!: Mesh;
   /** cores (linear) de cada cadente: rgb por cadente */
   private cadCores: Float32Array;
   private uCad = { uMestre: this.uMestre, uEscala: this.uniformesComuns.uEscala };
-  /** câmera viva da entrada cadentes: deslocamentos atuais (amortecidos) */
-  private camCad = { dist: 0, az: 0, el: 0, rol: 0 };
-  /** pulo/giro nas cadentes: o roteiro corre com este fator até tRevelacao = corridaAte */
-  private fatorCorrida = 1;
-  private corridaAte = 0;
+  private vEsp = new Vector3();
   private formouEmitido = false;
 
   // ---------- celebração ao parar ----------
@@ -1265,7 +1324,8 @@ export class Cena {
     this.perfil = PERFIS[opcoes.nivel];
     this.leve = opcoes.nivel === "leve";
     this.ampAtual = this.leve ? 0 : 1;
-    this.durChegada = this.leve ? DUR_CHEGADA_LEVE : DUR_CHEGADA;
+    // redefinida a cada chegada pela entrada escolhida (iniciarChegada)
+    this.durChegada = this.leve ? DUR_CHEGADA_CAD_LEVE : DUR_CHEGADA_CAD;
     this.renderer = new WebGLRenderer({ antialias: this.perfil.antialias, alpha: false, stencil: false, powerPreference: "high-performance" });
     this.renderer.setClearColor(new Color(COR_FUNDO));
     this.dprAtual = Math.min(window.devicePixelRatio || 1, this.perfil.dprMax);
@@ -1340,19 +1400,33 @@ export class Cena {
     this.pinos.count = 0;
     this.disco.add(this.pinos);
 
-    this.cubo = new Mesh(new CylinderGeometry(0.16, 0.18, 0.08, 48), azulEscuro);
+    this.cubo = new Mesh(new CylinderGeometry(R_MEDALHAO + 0.005, R_MEDALHAO + 0.025, 0.08, 48), azulEscuro);
     this.cubo.rotation.x = Math.PI / 2;
     this.cubo.position.z = 0.04;
     this.inclinacao.add(this.cubo);
-    this.anelCubo = new Mesh(new TorusGeometry(0.165, 0.012, this.leve ? 8 : 16, this.leve ? 64 : 96), metal);
-    this.anelCubo.position.z = 0.08;
+    // anel metálico fino (ouro com reflexo prateado do matcap) em volta do medalhão
+    this.anelCubo = new Mesh(new TorusGeometry(R_MEDALHAO + 0.004, 0.009, this.leve ? 8 : 16, this.leve ? 64 : 96), ouro);
+    this.anelCubo.position.z = Z_MEDALHAO;
     this.inclinacao.add(this.anelCubo);
-    this.estrelaCentral = new Mesh(
-      new PlaneGeometry(0.3, 0.3),
-      new MeshBasicMaterial({ map: texturaEstrela4(this.perfil.ladoSprite), transparent: true, depthWrite: false }),
-    );
-    this.estrelaCentral.position.z = 0.085;
-    this.inclinacao.add(this.estrelaCentral);
+
+    // medalhão: disco perolado (opaco) + logo por cima (transparente), ambos sem luz
+    this.matDisco = new MeshBasicMaterial({ map: texturaPerola(Math.max(256, Math.min(512, this.perfil.ladoSprite))) });
+    const disco = new Mesh(new CircleGeometry(R_MEDALHAO, 64), this.matDisco);
+    disco.position.z = 0.0015;
+    this.medalhao.add(disco);
+    // até a logo chegar, um texel transparente: o programa do shader já nasce com "map"
+    const provisoria = new DataTexture(new Uint8Array(4), 1, 1);
+    provisoria.colorSpace = SRGBColorSpace;
+    provisoria.needsUpdate = true;
+    this.descartaveis.push(provisoria);
+    this.matLogo = new MeshBasicMaterial({ map: provisoria, transparent: true, depthWrite: false });
+    const larguraLogo = 2 * R_MEDALHAO * LARGURA_LOGO;
+    this.logo = new Mesh(new PlaneGeometry(larguraLogo, larguraLogo * PROPORCAO_LOGO), this.matLogo);
+    this.logo.position.z = 0.003;
+    this.medalhao.add(this.logo);
+    this.medalhao.position.z = Z_MEDALHAO;
+    this.inclinacao.add(this.medalhao);
+    this.carregarLogo();
 
     // brilho especular que NÃO gira (vende o volume)
     this.matBrilho = new MeshBasicMaterial({
@@ -1426,6 +1500,7 @@ export class Cena {
     this.nRastroCad = this.leve ? 14 : 22;
     this.cadParam = new Float32Array(this.nCad * NP);
     this.cadAmostras = new Float32Array(this.nRastroCad * 3);
+    this.cadLider = new Float32Array(this.nRastroCad * NQ);
     this.cadCores = new Float32Array(this.nCad * 3);
     this.criarCadentes();
 
@@ -1447,6 +1522,7 @@ export class Cena {
     this.disco.add(this.setor);
 
     if (this.perfil.bloom) this.ligarBloom();
+    this.ajustarBrilhoMedalhao();
     this.redimensionar();
     window.addEventListener("resize", this.redimensionar);
     window.addEventListener("pointermove", this.moverPonteiro, { passive: true });
@@ -1473,12 +1549,58 @@ export class Cena {
     }
     this.enxame.visible = false;
     this.setor.visible = false;
+    // a logo foi compilada com a textura provisória; só aparece quando o arquivo chegar
+    this.logo.visible = this.logoCarregada;
     this.aplicarOculta();
     this.avisarNivel();
     this.quadro = requestAnimationFrame(this.passo);
   }
 
   // ---------- construção ----------
+  /**
+   * Logo do medalhão (WebP com fundo transparente): sRGB, mipmaps, anisotropia do perfil. Sobe
+   * para a GPU assim que carrega; se o arquivo faltar ou falhar, fica só o medalhão.
+   */
+  private carregarLogo() {
+    new TextureLoader().load(
+      URL_LOGO,
+      (tex: Texture) => {
+        if (this.destruido) {
+          tex.dispose();
+          return;
+        }
+        tex.colorSpace = SRGBColorSpace;
+        tex.generateMipmaps = true;
+        tex.anisotropy = Math.min(this.perfil.anisotropia, this.renderer.capabilities.getMaxAnisotropy());
+        tex.needsUpdate = true;
+        this.descartaveis.push(tex);
+        this.matLogo.map = tex;
+        this.matLogo.needsUpdate = true;
+        try {
+          this.renderer.initTexture(tex);
+        } catch {
+          /* sobe no primeiro quadro em que aparecer */
+        }
+        this.logoCarregada = true;
+        this.logo.visible = true;
+      },
+      undefined,
+      () => {
+        if (!this.destruido) console.warn(`Logo do medalhão indisponível (${URL_LOGO}); seguindo só com o medalhão.`);
+      },
+    );
+  }
+
+  /**
+   * Medalhão sem luz (MeshBasic): sem bloom sai como desenhado; com bloom (cena linear, limiar
+   * BLOOM_LIMIAR) o disco claro fica logo abaixo do limiar, para não virar uma mancha de luz.
+   */
+  private ajustarBrilhoMedalhao() {
+    const bloom = !!this.composer;
+    this.matDisco.color.setScalar(bloom ? BRILHO_DISCO_BLOOM : 1);
+    this.matLogo.color.setScalar(bloom ? BRILHO_LOGO_BLOOM : 1);
+  }
+
   private criarEstrelas(): Points {
     const n = this.leve ? 900 : 1800;
     // casca de estrelas ao redor de toda a cena, só nas direções que a câmera final NÃO vê:
@@ -1943,7 +2065,7 @@ export class Cena {
     gl.setAttribute("aGrupo", new BufferAttribute(new Float32Array(grupo), 1));
     gl.setAttribute("aTipo", new BufferAttribute(new Float32Array(tipo), 1));
     const ml = new ShaderMaterial({
-      uniforms: { uEstrela: this.uEstrelaPos, uAceso: { value: this.aceso }, uTempo: this.uniformesComuns.uTempo, uMestre: this.uMestre },
+      uniforms: { uAlvos: { value: this.alvosLig }, uAceso: { value: this.aceso }, uTempo: this.uniformesComuns.uTempo, uMestre: this.uMestre },
       vertexShader: VERT_LIGACOES,
       fragmentShader: FRAG_LIGACOES,
       transparent: true,
@@ -2158,9 +2280,10 @@ export class Cena {
     this.durRetomada = 0;
     this.saltouRoteiro = false;
     this.entradaAtual = this.opcoes.entrada === "estrela" ? "estrela" : "cadentes";
-    this.modoCadentes = this.entradaAtual === "cadentes" ? 1 : 0;
-    this.fatorCorrida = 1;
-    this.corridaAte = 0;
+    const cadentes = this.entradaAtual === "cadentes";
+    this.durChegada = cadentes ? (this.leve ? DUR_CHEGADA_CAD_LEVE : DUR_CHEGADA_CAD) : this.leve ? DUR_CHEGADA_LEVE : DUR_CHEGADA;
+    this.modoCadentes = cadentes ? 1 : 0;
+    this.cadDoGrupo.fill(-1);
     this.formouEmitido = false;
     // uma celebração que ainda se apagava some (as cadentes passam a ser da entrada)
     this.encerrarCelebracao();
@@ -2196,22 +2319,10 @@ export class Cena {
    * comprimir a perseguição. Com a viagem em curso, ela se apaga onde está (o roteiro para)
    * enquanto a câmera sai da perseguição em tempo real; o roteiro então salta para perto do
    * pouso e a supernova e a formação seguem com fator moderado. Perto do pouso, só acelera.
+   * Igual nas duas entradas: nas cadentes a revoada se apaga junto e reacende já no fim da
+   * espiral (T_RETOMA), fechando no centro.
    */
   private acelerarChegada(dur: number) {
-    if (this.entradaAtual === "cadentes") {
-      // cadentes: sem perseguição para soltar. O roteiro corre (as cadentes disparam, como um
-      // time-lapse) até a espiral final em FRACAO_CORRIDA do tempo e a formação segue no resto
-      const tRetoma = (T_RETOMA / T_FIM) * this.durChegada;
-      if (this.tRevelacao < tRetoma) {
-        const durCorrida = dur * FRACAO_CORRIDA;
-        this.corridaAte = tRetoma;
-        this.fatorCorrida = Math.max(1, this.fatorCorrida, (tRetoma - this.tRevelacao) / durCorrida);
-        this.fatorChegada = Math.max(this.fatorChegada, (this.durChegada - tRetoma) / (dur - durCorrida));
-      } else {
-        this.fatorChegada = Math.max(this.fatorChegada, (this.durChegada - this.tRevelacao) / dur);
-      }
-      return;
-    }
     this.soltarPerseguicao();
     if (this.apagarRestante > 0) {
       // já se apagando (giro depois de um toque): só encurta o que falta
@@ -2270,25 +2381,6 @@ export class Cena {
   /** Avança o relógio da revelação (antes da câmera, que usa o peso da perseguição). */
   private avancarRevelacao(dt: number) {
     const saidaPerseg = Math.exp(-dt * K_SAIDA_PERSEG);
-    if (this.modoRevelacao === "chegando" && this.entradaAtual === "cadentes") {
-      // cadentes: só o relógio (com a corrida do pulo/giro); a câmera nunca persegue
-      let dtR = dt * this.fatorChegada;
-      if (this.tRevelacao < this.corridaAte) {
-        const falta = this.corridaAte - this.tRevelacao;
-        const dtCorrida = falta / this.fatorCorrida; // s reais até o fim da corrida
-        dtR = dt <= dtCorrida ? dt * this.fatorCorrida : falta + (dt - dtCorrida) * this.fatorChegada;
-      }
-      this.tRevelacao += dtR;
-      const u = Math.min(1, this.tRevelacao / this.durChegada);
-      this.tau = u * T_FIM;
-      this.dtRoteiro = dtR * (T_FIM / this.durChegada);
-      this.revelacao = faixa(this.tau, T_POUSO, T_FIM);
-      this.mestreChegada = 1;
-      this.pesoPerseguicao *= saidaPerseg;
-      if (this.pesoPerseguicao > 0.0005) this.avancarPerseguicaoSolta(dt);
-      if (u >= 1) this.mostrarDireto();
-      return;
-    }
     if (this.modoRevelacao === "chegando") {
       if (this.apagarRestante > 0) {
         // pulo: o roteiro para; a estrela segue com a câmera, freando, e a viagem se apaga
@@ -2378,8 +2470,7 @@ export class Cena {
     p[1].x -= 0.7;
     p[1].y += 0.3;
     ROTA.forEach(([x, y, z], i) => p[i + 2].set(x, y, z));
-    const zCentro = 0.085; // estrelaCentral.position.z
-    p[p.length - 1].set(0, -Math.sin(INCLINACAO_ATIVA) * zCentro, Math.cos(INCLINACAO_ATIVA) * zCentro);
+    p[p.length - 1].set(0, -SIN_INC * Z_CENTRO, COS_INC * Z_CENTRO); // centro do medalhão
     this.curva.updateArcLengths();
     this.compCurva = this.curva.getLength();
     this.velCruzeiro = (VMAX * this.compCurva) / (T_POUSO - T_PARTIDA);
@@ -2435,20 +2526,18 @@ export class Cena {
   /** Aplica o estado do quadro às peças (depois da câmera: rastro e estrela usam a pose dela). */
   private aplicarRevelacao(dt: number) {
     if (this.modoRevelacao === "chegando") {
-      const cadentes = this.entradaAtual === "cadentes";
       if (this.viagemPendente) {
-        if (cadentes) this.prepararCadentes();
-        else this.prepararViagem();
+        this.prepararViagem();
+        if (this.entradaAtual === "cadentes") this.prepararCadentes();
         this.viagemPendente = false;
       }
-      if (cadentes) this.aplicarChegadaCadentes();
-      else this.aplicarChegada();
+      this.aplicarChegada();
     } else if (this.modoRevelacao === "saindo") {
       this.aplicarSaida(Math.min(1, this.tRevelacao / DUR_SAIDA), dt);
     }
   }
 
-  private escalar(obj: Mesh, s: number, z0: number) {
+  private escalar(obj: Mesh | Group, s: number, z0: number) {
     obj.visible = s > 0.001;
     obj.scale.setScalar(Math.max(s, 1e-4));
     obj.position.z = z0 * s;
@@ -2505,7 +2594,10 @@ export class Cena {
     }
   }
 
-  /** Um quadro da chegada: estrela, rastro, riscos, constelações e formação da roleta. */
+  /**
+   * Um quadro da chegada: estrela viajante (ou a revoada de cadentes em volta do líder), rastro,
+   * riscos, constelações e formação da roleta. vEstrela = ponto da curva (estrela ou líder).
+   */
   private aplicarChegada() {
     const tau = this.tau;
     const s = this.sViagem;
@@ -2513,8 +2605,22 @@ export class Cena {
     this.tangenteEm(s, this.vTanEstrela);
     this.uMestre.value = this.mestreChegada;
     const vel = this.velViagem * this.velCruzeiro; // mundo por segundo do roteiro
-    this.aplicarEstrela(tau);
-    this.aplicarRastro(s * this.compCurva, vel);
+    if (this.entradaAtual === "cadentes") {
+      this.rastro.visible = false;
+      if (this.modoCadentes === 1) {
+        this.aplicarCadentes(tau, 1);
+        // depois do pouso e com tudo apagado, as cadentes param de ser calculadas
+        if (tau > T_POUSO + 0.4) {
+          this.modoCadentes = 0;
+          this.cadCabecas.visible = false;
+          this.cadRastros.visible = false;
+        }
+      }
+      this.aplicarNucleoCadentes(tau);
+    } else {
+      this.aplicarEstrela(tau);
+      this.aplicarRastro(s * this.compCurva, vel);
+    }
     this.aplicarWarp(tau, vel);
     this.aplicarLigacoes(tau);
     this.aplicarFormacao(tau);
@@ -2612,26 +2718,60 @@ export class Cena {
     u.uForca.value = forca;
   }
 
-  /** As 3 constelações mais próximas da rota acendem quando a estrela passa por elas. */
+  /**
+   * As 3 constelações mais próximas da rota acendem quando a estrela (ou a revoada) passa por
+   * elas. Na estrela as linhas vão até ela; nas cadentes, cada constelação acesa escolhe a
+   * cadente visível mais próxima quando acende e fica ligada a ela até apagar.
+   */
   private aplicarLigacoes(tau: number) {
     const janela = suave(tau, 0.9, 1.3) * (1 - suave(tau, 5.6, 6.3));
+    const cadentes = this.entradaAtual === "cadentes" && this.cadCabecas.visible;
+    const posC = this.cadCabecas.geometry.getAttribute("position").array as Float32Array;
+    const bri = this.cadCabecas.geometry.getAttribute("aBrilho").array as Float32Array;
     let algum = false;
     for (let i = 0; i < this.gruposConst.length; i++) {
       const g = this.gruposConst[i];
       if (!g.ativo || janela <= 0) {
         g.memoria = 0;
         this.aceso[i] = 0;
+        this.cadDoGrupo[i] = -1;
         continue;
       }
       const k = 1 - faixa(this.vEstrela.distanceTo(g.centro), g.dMin + 0.2, g.dMin + 3.2);
       g.memoria = Math.max(k * k * (3 - 2 * k), g.memoria - this.dtRoteiro * 1.2);
       this.aceso[i] = g.memoria * janela;
-      if (this.aceso[i] > 0.002) algum = true;
+      const alvo = this.alvosLig[i];
+      if (this.aceso[i] > 0.002) {
+        algum = true;
+        if (cadentes) {
+          let c = this.cadDoGrupo[i];
+          if (c < 0 || bri[c] <= 0) {
+            let melhor = Infinity;
+            c = -1;
+            for (let j = 0; j < this.nCad; j++) {
+              if (bri[j] <= 0) continue;
+              const dx = posC[j * 3] - g.centro.x;
+              const dy = posC[j * 3 + 1] - g.centro.y;
+              const dz = posC[j * 3 + 2] - g.centro.z;
+              const d2 = dx * dx + dy * dy + dz * dz;
+              if (d2 < melhor) {
+                melhor = d2;
+                c = j;
+              }
+            }
+            this.cadDoGrupo[i] = c;
+          }
+          if (c >= 0) alvo.set(posC[c * 3], posC[c * 3 + 1], posC[c * 3 + 2]);
+          else alvo.copy(this.vEstrela);
+        } else alvo.copy(this.vEstrela);
+      } else {
+        this.cadDoGrupo[i] = -1;
+        alvo.copy(this.vEstrela);
+      }
     }
     algum = algum && this.mestreChegada > 0.002;
     this.ligacoes.visible = algum;
     this.nosAcesos.visible = algum;
-    this.uEstrelaPos.value.copy(this.vEstrela);
   }
 
   /** Supernova e roleta que se forma a partir da luz (do pouso, 6,6 s, até 8 s). */
@@ -2653,11 +2793,11 @@ export class Cena {
     this.escalar(this.lateral, sLado, -0.07);
     this.escalar(this.fundo, sLado, -0.14);
     this.escalar(this.aro, outBack(faixa(tau, 6.72, 7.1)), 0);
-    // cubo e estrela central nascem onde a estrela viajante parou
+    // cubo e medalhão (com a logo) nascem onde a estrela viajante parou / as cadentes se juntaram
     const sCubo = outBack(faixa(tau, 7.0, 7.45));
     this.escalar(this.cubo, sCubo, 0.04);
-    this.escalar(this.anelCubo, sCubo, 0.08);
-    this.escalar(this.estrelaCentral, outBack(faixa(tau, 7.15, 7.6)), 0.085);
+    this.escalar(this.anelCubo, sCubo, Z_MEDALHAO);
+    this.escalar(this.medalhao, outBack(faixa(tau, 7.1, 7.55)), Z_MEDALHAO);
     this.matBrilho.opacity = suave(tau, 7.45, 8);
     this.brilho.visible = this.matBrilho.opacity > 0.001;
 
@@ -2710,110 +2850,128 @@ export class Cena {
 
   // ---------- estrelas cadentes ----------
   /**
-   * Monta as trajetórias desta chegada (uma vez, com a câmera já posicionada). Cada cadente
-   * nasce num de três lugares, alternando: por trás da câmera (passa rente a ela), no fundo do
-   * céu ou nos lados; voa por uma curva de Hermite (tangente inicial desviada para o lado: a
-   * trajetória curva) até entrar, com a mesma velocidade, numa espiral horária no plano do
-   * disco que termina no centro em T_POUSO.
+   * Monta a revoada desta chegada (uma vez, depois de prepararViagem). Cada cadente tem um lugar
+   * na formação em volta do líder (lado/cima numa elipse, frente de −0,9 a +3,3 u à frente dele;
+   * a câmera fica D_ATRAS atrás), com ondulação própria nos três eixos; nasce em leque do ponto
+   * de partida e, perto do pouso, troca a formação por uma espiral horária no plano do disco
+   * (raio ~0,75–1,1, sobre o lugar da roleta) em volta do líder, que se fecha no centro em T_POUSO. Em retrato o lado
+   * encolhe com o aspect (a revoada não sai do quadro).
    */
   private prepararCadentes() {
     const p = this.cadParam;
     const n = this.nCad;
     const rnd = gerador(1 + (Math.floor(performance.now()) % 100000)); // varia a cada chegada
-    // pose da câmera com o recuo da entrada (o mesmo de atualizarCamera, sem parallax)
-    const D = this.distBase * (1 + CAM_CAD_DIST);
-    const az = CAM_CAD_AZ;
-    const el = 0.06 + CAM_CAD_EL;
-    const C = this.vB.set(Math.sin(az) * Math.cos(el) * D, Math.sin(el) * D, Math.cos(az) * Math.cos(el) * D);
-    const atras = this.vT1.copy(C).normalize(); // de C para trás (oposto ao olhar)
-    const lado = this.vLado.set(Math.cos(az), 0, -Math.sin(az));
-    const P0 = this.vA;
-    const dir = this.vCima;
-    const perp = this.vTanCam;
-    const E = this.vBase;
+    const kAsp = Math.max(0.5, Math.min(1, this.camera.aspect / 1.2));
     for (let i = 0; i < n; i++) {
       const o = i * NP;
-      const ga = i * 2.39996 + rnd() * 0.4; // ângulo áureo: direções bem espalhadas
-      const sx = Math.cos(ga);
-      const sy = Math.sin(ga);
-      const tipo = i % 3;
-      let t0 = 0.1 + (i / n) * 1.5 + rnd() * 0.35;
-      if (tipo === 0) {
-        // por trás da câmera, de lado: entra pela borda da tela, grande, e mergulha para o centro
-        P0.copy(C)
-          .addScaledVector(lado, (1.1 + rnd() * 1.6) * (sx >= 0 ? 1 : -1))
-          .addScaledVector(EIXO_Y, sy * (0.5 + rnd() * 1.1))
-          .addScaledVector(atras, 0.8 + rnd() * 2.2);
-        t0 += 0.35;
-      } else if (tipo === 1) {
-        // fundo do céu
-        P0.set(sx * (4 + rnd() * 7), sy * (1.5 + rnd() * 4), -(13 + rnd() * 12));
-      } else {
-        // lados, à meia distância: cruzam a tela
-        P0.set((sx >= 0 ? 1 : -1) * (9 + rnd() * 4), sy * (1 + rnd() * 4.5), -(1 + rnd() * 6));
-      }
-      const tE = Math.max(t0 + 1.6, 3.3 + rnd() * 1.3);
-      p[o + P_T_INI] = t0;
-      p[o + P_T_ESP] = tE;
-      p[o + P_R_E] = 1.45 + rnd() * 0.55;
-      // entra na espiral um pouco adiante (horário) do lado de onde veio
-      p[o + P_FI_E] = Math.atan2(P0.x, P0.y) + 0.5 + rnd() * 0.4;
-      p[o + P_H0] = 0.12 + rnd() * 0.4;
-      P0.toArray(p, o + P_P0);
-      // ponto e velocidade (u por s do roteiro) de entrada na espiral
-      this.espiralCadente(o, 0, E);
-      this.espiralCadente(o, 0.002, dir);
-      dir.sub(E).divideScalar(0.002 * (T_POUSO - tE));
-      E.toArray(p, o + P_E);
-      dir.toArray(p, o + P_TE);
-      // velocidade inicial: rumo ao ponto de entrada, desviada para o lado (curva visível)
-      dir.copy(E).sub(P0);
-      const dist = dir.length();
-      dir.divideScalar(Math.max(dist, 1e-4));
-      perp.crossVectors(dir, tipo === 2 ? this.vEstrela.set(0, 0, 1) : EIXO_Y);
-      if (perp.lengthSq() < 1e-6) perp.set(1, 0, 0);
-      perp.normalize().multiplyScalar((rnd() < 0.5 ? -1 : 1) * (0.45 + rnd() * 0.5));
-      dir.add(perp).normalize().multiplyScalar((dist / (tE - t0)) * 1.15);
-      dir.toArray(p, o + P_T0);
+      const ga = i * 2.39996 + rnd() * 0.4; // ângulo áureo: lugares bem espalhados
+      const frente = -0.9 + rnd() * 4.2;
+      // as que vão mais perto da câmera ficam longe do eixo do olhar (passam ao lado dela)
+      let anel = 0.4 + 0.6 * Math.sqrt((i + 0.5) / n);
+      if (frente < 1) anel = Math.max(anel, 0.9);
+      p[o + P_OF] = Math.cos(ga) * anel * 1.25 * kAsp;
+      p[o + P_OF + 1] = Math.sin(ga) * anel * 0.7;
+      p[o + P_OF + 2] = frente;
+      p[o + P_OA] = (0.12 + rnd() * 0.18) * kAsp;
+      p[o + P_OA + 1] = 0.08 + rnd() * 0.14;
+      // ultrapassam umas às outras, sem nunca chegar à câmera
+      p[o + P_OA + 2] = Math.min(0.3 + rnd() * 0.6, 0.4 + 0.5 * (frente + 0.9));
+      p[o + P_OFASE] = rnd() * TAU;
+      p[o + P_OFASE + 1] = rnd() * TAU;
+      p[o + P_OFASE + 2] = rnd() * TAU;
+      p[o + P_OW] = 1.1 + rnd() * 1.3;
+      p[o + P_T_INI] = 0.05 + (i / n) * 0.55 + rnd() * 0.1;
+      p[o + P_T_ESP] = 5.25 + rnd() * 0.4;
+      p[o + P_R_E] = 0.75 + rnd() * 0.35;
+      p[o + P_FI_E] = ga;
+      p[o + P_H0] = 0.12 + rnd() * 0.3;
     }
   }
 
-  /** Espiral da entrada (k = 0..1) no plano do disco com a inclinação final, em mundo. */
+  /**
+   * Espiral da entrada (k = 0..1) no plano do disco com a inclinação final, em mundo. Para k < 0
+   * (antes da entrada) segue para fora em linha reta no raio, no ângulo e na altura (mesma
+   * derivada em k = 0): a revoada se mistura com ela sem tranco.
+   */
   private espiralCadente(o: number, k: number, out: Vector3): Vector3 {
     const p = this.cadParam;
-    const kk = saturar(k);
-    const resto = 1 - kk;
-    const r = p[o + P_R_E] * resto ** 1.25;
-    const fi = p[o + P_FI_E] + ESP_A * kk + ESP_B * kk * kk;
-    const zl = Z_CENTRO + (p[o + P_H0] - Z_CENTRO) * resto * resto;
+    let r: number;
+    let fi: number;
+    let zl: number;
+    if (k < 0) {
+      const kk = Math.max(-0.9, k);
+      r = p[o + P_R_E] * (1 - 1.25 * kk);
+      fi = p[o + P_FI_E] + ESP_A * kk;
+      zl = p[o + P_H0] - 2 * (p[o + P_H0] - Z_CENTRO) * kk;
+    } else {
+      const kk = saturar(k);
+      const resto = 1 - kk;
+      r = p[o + P_R_E] * resto ** 1.25;
+      fi = p[o + P_FI_E] + ESP_A * kk + ESP_B * kk * kk;
+      zl = Z_CENTRO + (p[o + P_H0] - Z_CENTRO) * resto * resto;
+    }
     const xl = Math.sin(fi) * r;
     const yl = Math.cos(fi) * r;
     return out.set(xl, yl * COS_INC - zl * SIN_INC, yl * SIN_INC + zl * COS_INC);
   }
 
-  /** Posição da cadente no instante t (roteiro): reta antes de nascer, Hermite, espiral. */
-  private posCadenteEntrada(o: number, t: number, out: Vector3): Vector3 {
+  /** Referencial do líder na posição s da curva (amostra j de cadLider): posição, lado, cima, frente. */
+  private quadroLider(j: number, s: number) {
+    const q = this.cadLider;
+    const b = j * NQ;
+    const pos = this.curva.getPointAt(s, this.vA);
+    const frente = this.tangenteEm(s, this.vB);
+    const lado = this.vLado.crossVectors(frente, EIXO_Y);
+    if (lado.lengthSq() < 1e-6) lado.set(1, 0, 0);
+    else lado.normalize();
+    const cima = this.vCima.crossVectors(lado, frente);
+    q[b] = pos.x;
+    q[b + 1] = pos.y;
+    q[b + 2] = pos.z;
+    q[b + 3] = lado.x;
+    q[b + 4] = lado.y;
+    q[b + 5] = lado.z;
+    q[b + 6] = cima.x;
+    q[b + 7] = cima.y;
+    q[b + 8] = cima.z;
+    q[b + 9] = frente.x;
+    q[b + 10] = frente.y;
+    q[b + 11] = frente.z;
+  }
+
+  /**
+   * Posição da cadente no instante t (roteiro) com o referencial do líder da amostra j: lugar
+   * na revoada (abrindo em leque ao nascer) misturado, perto do pouso, com a espiral em volta do
+   * líder. No pouso o líder está no centro do disco e a espiral fecha nele.
+   */
+  private posCadenteViagem(o: number, t: number, j: number, out: Vector3): Vector3 {
     const p = this.cadParam;
-    const t0 = p[o + P_T_INI];
+    const q = this.cadLider;
+    const b = j * NQ;
     const tE = p[o + P_T_ESP];
-    if (t >= tE) return this.espiralCadente(o, (t - tE) / (T_POUSO - tE), out);
-    if (t < t0) {
-      const d = t - t0;
-      return out.set(p[o + P_P0] + p[o + P_T0] * d, p[o + P_P0 + 1] + p[o + P_T0 + 1] * d, p[o + P_P0 + 2] + p[o + P_T0 + 2] * d);
+    const w = suave(t, tE - MISTURA_ESP, tE + 0.1);
+    let ox = 0;
+    let oy = 0;
+    let oz = 0;
+    if (w < 1) {
+      const t0 = p[o + P_T_INI];
+      const abre = outCubic(faixa(t, t0 - 0.05, t0 + 0.75));
+      const fw = p[o + P_OW];
+      const l = (p[o + P_OF] + p[o + P_OA] * Math.sin(fw * t + p[o + P_OFASE])) * abre;
+      const c = (p[o + P_OF + 1] + p[o + P_OA + 1] * Math.sin(fw * 1.3 * t + p[o + P_OFASE + 1])) * abre;
+      const f = (p[o + P_OF + 2] + p[o + P_OA + 2] * Math.sin(fw * 0.7 * t + p[o + P_OFASE + 2])) * abre;
+      ox = q[b + 3] * l + q[b + 6] * c + q[b + 9] * f;
+      oy = q[b + 4] * l + q[b + 7] * c + q[b + 10] * f;
+      oz = q[b + 5] * l + q[b + 8] * c + q[b + 11] * f;
     }
-    const D = tE - t0;
-    const u = (t - t0) / D;
-    const u2 = u * u;
-    const u3 = u2 * u;
-    const h00 = 2 * u3 - 3 * u2 + 1;
-    const h10 = (u3 - 2 * u2 + u) * D;
-    const h01 = -2 * u3 + 3 * u2;
-    const h11 = (u3 - u2) * D;
-    return out.set(
-      p[o + P_P0] * h00 + p[o + P_T0] * h10 + p[o + P_E] * h01 + p[o + P_TE] * h11,
-      p[o + P_P0 + 1] * h00 + p[o + P_T0 + 1] * h10 + p[o + P_E + 1] * h01 + p[o + P_TE + 1] * h11,
-      p[o + P_P0 + 2] * h00 + p[o + P_T0 + 2] * h10 + p[o + P_E + 2] * h01 + p[o + P_TE + 2] * h11,
-    );
+    if (w > 0) {
+      // espiral relativa ao centro do disco (onde o líder pousa)
+      const e = this.espiralCadente(o, (t - tE) / (T_POUSO - tE), this.vEsp);
+      ox += (e.x - ox) * w;
+      oy += (e.y + SIN_INC * Z_CENTRO - oy) * w;
+      oz += (e.z - COS_INC * Z_CENTRO - oz) * w;
+    }
+    return out.set(q[b] + ox, q[b + 1] + oy, q[b + 2] + oz);
   }
 
   /** Posição na explosão do resultado (t em s reais): arrasto, curva lateral e gravidade leve. */
@@ -2880,6 +3038,12 @@ export class Cena {
     const lado = this.vLadoRastro;
     const lag = explosao ? LAG_RASTRO_EXP : LAG_RASTRO_CAD;
     const largura = (explosao ? 0.028 : 0.036) * (this.leve ? 0.9 : 1);
+    if (!explosao) {
+      // referencial do líder em cada instante amostrado (o mesmo para todas as cadentes). No
+      // pulo a câmera/líder seguem pela curva com o roteiro parado: a história anda junto (dS)
+      const dS = this.sViagem - sDoRoteiro(t);
+      for (let j = 0; j < m; j++) this.quadroLider(j, saturar(sDoRoteiro(t - (lag * j) / (m - 1)) + dS));
+    }
     let alguma = false;
     for (let i = 0; i < n; i++) {
       const o = i * NP;
@@ -2891,14 +3055,14 @@ export class Cena {
         b = suave(t, t0, t0 + 0.08) * (1 - suave(t, t0 + vida * 0.5, t0 + vida)) * 1.2;
         aR = b * 0.9;
       } else {
-        const nasce = suave(t, t0 - 0.25, t0 + 0.2);
+        const nasce = suave(t, t0 - 0.05, t0 + 0.2);
         b = nasce * (1 + 0.6 * suave(t, p[o + P_T_ESP], T_POUSO)) * (1 - suave(t, T_POUSO - 0.12, T_POUSO + 0.05));
         aR = nasce * (1 - suave(t, T_POUSO - 0.05, T_POUSO + 0.35));
       }
       b *= mestre;
       aR *= mestre;
       if (explosao) this.posCadenteExplosao(o, t, v);
-      else this.posCadenteEntrada(o, t, v);
+      else this.posCadenteViagem(o, t, 0, v);
       posC[i * 3] = v.x;
       posC[i * 3 + 1] = v.y;
       posC[i * 3 + 2] = v.z;
@@ -2913,7 +3077,7 @@ export class Cena {
       for (let j = 0; j < m; j++) {
         const tj = t - (lag * j) / (m - 1);
         if (explosao) this.posCadenteExplosao(o, tj, v);
-        else this.posCadenteEntrada(o, tj, v);
+        else this.posCadenteViagem(o, tj, j, v);
         pts[j * 3] = v.x;
         pts[j * 3 + 1] = v.y;
         pts[j * 3 + 2] = v.z;
@@ -2950,47 +3114,45 @@ export class Cena {
     attrA.needsUpdate = true;
   }
 
-  /** Um quadro da entrada cadentes: cadentes, brilho que cresce no centro, flash e formação. */
-  private aplicarChegadaCadentes() {
-    const tau = this.tau;
-    this.uMestre.value = this.mestreChegada;
-    // peças da estrela viajante ficam de fora
-    this.rastro.visible = false;
-    this.warp.visible = false;
-    this.ligacoes.visible = false;
-    this.nosAcesos.visible = false;
-    if (this.modoCadentes === 1) {
-      this.aplicarCadentes(tau, 1);
-      // depois do pouso e com tudo apagado, as cadentes param de ser calculadas
-      if (tau > T_POUSO + 0.4) {
-        this.modoCadentes = 0;
-        this.cadCabecas.visible = false;
-        this.cadRastros.visible = false;
-      }
-    }
-
-    // núcleo no centro: cresce enquanto elas se juntam, explode no flash e vira a estrela do cubo
+  /**
+   * Ponto de luz da entrada cadentes (a estrelaViajante): no nascimento acende no ponto de
+   * partida do líder (o leque de cadentes sai dele) e se apaga quando a revoada parte; perto do
+   * pouso, no centro: cresce enquanto elas se juntam, explode no flash e encolhe no medalhão.
+   */
+  private aplicarNucleoCadentes(tau: number) {
     const e = this.estrelaViajante;
     const cam = this.camera;
+    const u = this.uEstrela;
+    if (tau < 2) {
+      const kN = faixa(tau, 0, 0.45);
+      const nasc = (kN <= 0 ? 0 : outBack(kN)) * (1 - suave(tau, 0.55, 1.2));
+      const dist = Math.max(0.3, this.vA.copy(this.vEstrela).sub(cam.position).length());
+      const brilho = Math.min(1, kN * 4) * nasc * 1.3;
+      e.visible = brilho * this.mestreChegada > 0.002;
+      e.position.copy(this.vEstrela);
+      e.quaternion.copy(cam.quaternion);
+      e.scale.setScalar(Math.max(1e-4, 0.2 * nasc * 2 * TAN_MEIO_FOV * dist));
+      u.uGiro.value = 0.4 * tau;
+      u.uBrilho.value = brilho;
+      u.uRaiosForca.value = 1.1;
+      return;
+    }
     const junta = suave(tau, 5.0, T_POUSO);
     const dp = tau - T_POUSO;
     const flash = dp < 0 ? Math.exp(-((dp / 0.08) ** 2)) : Math.exp(-dp / 0.18);
     const pulso = 1 + 0.1 * junta * Math.sin(tau * TAU * 2.5);
-    this.vEstrela.set(0, -SIN_INC * Z_CENTRO, COS_INC * Z_CENTRO);
-    const dist = Math.max(0.3, this.vA.copy(this.vEstrela).sub(cam.position).length());
+    const centro = this.vBase.set(0, -SIN_INC * Z_CENTRO, COS_INC * Z_CENTRO);
+    const dist = Math.max(0.3, this.vA.copy(centro).sub(cam.position).length());
     let tamanho = ((0.05 + 0.2 * junta) * junta * pulso + 0.26 * flash) * 2 * TAN_MEIO_FOV * dist;
-    tamanho += (0.42 - tamanho) * suave(tau, 6.75, 7.55);
+    tamanho += (2 * R_MEDALHAO - tamanho) * suave(tau, 6.75, 7.55);
     const brilho = (junta * 0.9 + 2.8 * flash) * (1 - suave(tau, 7.3, 7.85));
-    e.visible = brilho > 0.002;
-    e.position.copy(this.vEstrela);
+    e.visible = brilho * this.mestreChegada > 0.002;
+    e.position.copy(centro);
     e.quaternion.copy(cam.quaternion);
     e.scale.setScalar(Math.max(1e-4, tamanho));
-    const u = this.uEstrela;
     u.uGiro.value = 0.4 * tau + 0.6 * flash;
     u.uBrilho.value = brilho;
     u.uRaiosForca.value = 0.7 + 0.9 * flash;
-
-    this.aplicarFormacao(tau);
   }
 
   // ---------- celebração ao parar ----------
@@ -3026,6 +3188,7 @@ export class Cena {
     this.enxame.visible = false;
     this.matEnxame.uniforms.uAlfa.value = 0;
     this.ponteiro.scale.set(0.75, 1.5, 0.55);
+    if (this.modoRevelacao !== "chegando") this.medalhao.scale.setScalar(1);
     this.uAnel.uCoresMix.value = 0;
     if (this.modoCadentes === 2) {
       this.modoCadentes = 0;
@@ -3057,6 +3220,10 @@ export class Cena {
     us.uPulso.value = (0.5 + 0.5 * Math.sin(tc * TAU * 2.2)) * (0.3 + 0.7 * pulsoAmp);
     us.uVarre.value = tc < 1.8 ? -0.2 + 1.4 * ((tc / 0.9) % 1) : 3;
     this.setor.visible = us.uLarg.value > 0 && us.uAlfa.value > 0.002;
+
+    // medalhão pulsa de leve durante todo o resultado (mais forte no começo); some com mc
+    const pm = 0.5 + 0.5 * Math.sin(tc * TAU * 0.9);
+    this.medalhao.scale.setScalar(1 + mc * pm * (0.018 + 0.03 * Math.exp(-tc / 1.4)));
 
     if (!ativa) {
       // fim da parte animada: sobra só a fatia acesa
@@ -3183,8 +3350,8 @@ export class Cena {
     this.escalar(this.lateral, 1, -0.07);
     this.escalar(this.fundo, 1, -0.14);
     this.escalar(this.cubo, 1, 0.04);
-    this.escalar(this.anelCubo, 1, 0.08);
-    this.escalar(this.estrelaCentral, 1, 0.085);
+    this.escalar(this.anelCubo, 1, Z_MEDALHAO);
+    this.escalar(this.medalhao, 1, Z_MEDALHAO);
     this.matBrilho.opacity = 1;
     this.brilho.visible = true;
     this.ponteiro.visible = true;
@@ -3233,25 +3400,14 @@ export class Cena {
     this.ampAtual += (alvoAmp - this.ampAtual) * (1 - Math.exp(-dt * 2));
     this.elAtivo += ((ativo ? 0.05 : 0) - this.elAtivo) * k;
     const amplitude = this.ampAtual;
-    // entrada cadentes: a câmera recua, gira um pouco e rola de leve enquanto elas cruzam o céu,
-    // e volta ao enquadramento antes da formação. Amortecido em tempo real: sem salto no início,
-    // no pulo/giro (o roteiro corre) nem no fim
-    const cc = this.camCad;
-    const env = this.modoRevelacao === "chegando" && this.entradaAtual === "cadentes" ? 1 - suave(this.tau, 2.6, 6.9) : 0;
-    const kc = 1 - Math.exp(-dt * K_CAM_CAD);
-    cc.dist += (CAM_CAD_DIST * env - cc.dist) * kc;
-    cc.az += (CAM_CAD_AZ * env * (0.8 + 0.2 * Math.sin(t * 0.7)) - cc.az) * kc;
-    cc.el += (CAM_CAD_EL * env - cc.el) * kc;
-    cc.rol += (0.05 * env * Math.sin(t * 0.55 + 0.6) - cc.rol) * kc;
-    const az = (Math.sin(t * 0.21) * 0.05 + p.x * 0.07) * amplitude + cc.az;
-    const el = (0.06 + Math.sin(t * 0.17) * 0.025 + p.y * 0.04) * amplitude + this.elAtivo + cc.el;
+    const az = (Math.sin(t * 0.21) * 0.05 + p.x * 0.07) * amplitude;
+    const el = (0.06 + Math.sin(t * 0.17) * 0.025 + p.y * 0.04) * amplitude + this.elAtivo;
 
     this.distBase = ((R * 1.12 * H) / (2 * raio * TAN_MEIO_FOV)) * (1 - 0.08 * this.aproximacao);
-    const dist = this.distBase * (1 + cc.dist);
+    const dist = this.distBase;
     const cam = this.camera;
     cam.position.set(Math.sin(az) * Math.cos(el) * dist, Math.sin(el) * dist, Math.cos(az) * Math.cos(el) * dist);
     cam.lookAt(0, 0, 0);
-    if (Math.abs(cc.rol) > 1e-5) cam.rotateZ(cc.rol);
 
     // chegada: mistura com a câmera de perseguição. Posição linear; a orientação é um lookAt
     // da posição misturada para um alvo entre a origem (enquadramento) e o da perseguição
@@ -3348,6 +3504,7 @@ export class Cena {
     this.bloom = null;
     this.renderer.toneMapping = NoToneMapping;
     this.renderer.setClearColor(new Color(COR_FUNDO));
+    this.ajustarBrilhoMedalhao();
     // shaders voltam a escrever direto na tela (recompila uma vez)
     if (avisar && !this.destruido) this.ligarCorCorreta();
     if (avisar) this.avisarNivel();

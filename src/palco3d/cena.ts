@@ -1486,7 +1486,8 @@ export class Cena {
     this.pontosRastro = new Float32Array(this.nRastro * 3);
     this.rastro = this.criarRastro(this.nRastro);
     this.cena.add(this.rastro);
-    this.warp = this.criarWarp(this.leve ? 160 : 560);
+    // poucos riscos, neutros e fracos: são poeira de velocidade, não podem parecer cadentes
+    this.warp = this.criarWarp(this.leve ? 90 : 200);
     this.cena.add(this.warp);
     this.criarLigacoes();
     this.anel = this.criarAnel();
@@ -2003,8 +2004,9 @@ export class Cena {
       const y = (rnd() - 0.5) * CAIXA_WARP;
       const z = (rnd() - 0.5) * CAIXA_WARP;
       const r = rnd();
-      c.set(r < 0.55 ? "#ffffff" : r < 0.8 ? "#a9c8ff" : r < 0.92 ? "#ffd59a" : LUZES[Math.floor(rnd() * LUZES.length)]);
-      c.multiplyScalar(0.55 + rnd() * 0.45);
+      // só branco/azulado e bem mais fraco que as cadentes (as únicas coloridas são as 9 da logo)
+      c.set(r < 0.6 ? "#ffffff" : "#a9c8ff");
+      c.multiplyScalar(0.22 + rnd() * 0.2);
       for (let k = 0; k < 2; k++) {
         const j = i * 2 + k;
         pos.set([x, y, z], j * 3);
